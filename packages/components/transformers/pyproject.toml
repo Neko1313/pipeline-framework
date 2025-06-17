@@ -1,0 +1,132 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pipeline-transformers"
+description = "Компоненты для трансформации данных в pipeline фреймворке"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "Pipeline Framework Team", email = "team@example.com" },
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Distributed Computing",
+    "Topic :: Data Science",
+]
+keywords = ["pipeline", "etl", "data-transformation", "transformers"]
+requires-python = ">=3.11"
+dependencies = [
+    "pipeline-core",
+    "pandas>=2.0.0",
+    "polars>=0.20.0",
+    "numpy>=1.24.0",
+    "pyarrow>=14.0.0",
+]
+dynamic = ["version"]
+
+[project.optional-dependencies]
+# Data processing libraries
+processing = [
+    "scikit-learn>=1.3.0",      # ML preprocessing
+    "scipy>=1.11.0",            # Scientific computing
+    "numba>=0.58.0",            # JIT compilation
+    "dask>=2023.10.0",          # Parallel computing
+]
+
+# Text processing
+text = [
+    "nltk>=3.8.0",              # Natural language toolkit
+    "spacy>=3.7.0",             # Advanced NLP
+    "transformers>=4.35.0",     # Hugging Face transformers
+    "textblob>=0.17.0",         # Simple text processing
+]
+
+# Image processing
+image = [
+    "pillow>=10.0.0",           # Image manipulation
+    "opencv-python>=4.8.0",     # Computer vision
+    "imageio>=2.31.0",          # Image I/O
+]
+
+# Statistical analysis
+stats = [
+    "statsmodels>=0.14.0",      # Statistical models
+    "seaborn>=0.12.0",          # Statistical visualization
+    "plotly>=5.17.0",           # Interactive plots
+]
+
+# Time series
+timeseries = [
+    "prophet>=1.1.0",           # Time series forecasting
+    "tslearn>=0.6.0",           # Time series ML
+]
+
+# Geospatial
+geo = [
+    "geopandas>=0.14.0",        # Geospatial data
+    "shapely>=2.0.0",           # Geometric objects
+    "folium>=0.15.0",           # Interactive maps
+]
+
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.6.0",
+    "pyright>=1.1.380",
+    "pre-commit>=3.4.0",
+]
+
+all = [
+    "pipeline-transformers[processing,text,image,stats,timeseries,geo]"
+]
+
+[project.urls]
+Homepage = "https://github.com/your-org/pipeline-framework"
+Documentation = "https://pipeline-framework.readthedocs.io"
+Repository = "https://github.com/your-org/pipeline-framework"
+Issues = "https://github.com/your-org/pipeline-framework/issues"
+
+[tool.hatch.version]
+path = "src/pipeline_transformers/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pipeline_transformers"]
+
+# Entry points для автоматической регистрации компонентов
+[project.entry-points."pipeline.components"]
+data-transformer = "pipeline_transformers.data.data_transformer:DataTransformer"
+aggregation-transformer = "pipeline_transformers.data.aggregation_transformer:AggregationTransformer"
+filter-transformer = "pipeline_transformers.data.filter_transformer:FilterTransformer"
+join-transformer = "pipeline_transformers.data.join_transformer:JoinTransformer"
+text-transformer = "pipeline_transformers.text.text_transformer:TextTransformer"
+ml-transformer = "pipeline_transformers.ml.ml_transformer:MLTransformer"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E", "W", "F", "I", "B", "C4", "UP", "SIM", "TCH", "PTH", "RUF",
+]
+ignore = [
+    "E501", "B008", "C901", "SIM108",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"tests/**/*" = ["B011", "S101"]
+
+[tool.pyright]
+include = ["src", "tests"]
+exclude = ["**/__pycache__"]
+pythonVersion = "3.11"
+typeCheckingMode = "strict"

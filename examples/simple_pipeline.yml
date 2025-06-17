@@ -1,0 +1,82 @@
+# Пример простого pipeline с использованием базовых компонентов
+metadata:
+  name: "simple-data-processing"
+  description: "Демонстрационный pipeline для обработки данных"
+  version: "1.0.0"
+  author: "Pipeline Team"
+  tags: ["demo", "simple", "transform"]
+
+# Глобальные переменные
+variables:
+  ENV: "development"
+  BATCH_SIZE: 1000
+  MULTIPLIER: 2.5
+  PREFIX: "processed_"
+
+# Ограничения ресурсов
+resources:
+  timeout: 1800  # 30 минут
+  max_parallel_stages: 5
+
+# Определение стадий pipeline
+# Формат: имя_стадии -> конфигурация стадии
+
+# Стадия 1: Создание тестовых данных
+generate_data:
+  type: "simple-data-generator"
+  config:
+    data_type: "numbers"
+    count: 1000
+    min_value: 1
+    max_value: 100
+
+# Стадия 2: Первая трансформация данных
+transform_multiply:
+  type: "simple-transform"
+  depends_on: ["generate_data"]
+  config:
+    source_stage: "generate_data"
+    operations: ["multiply"]
+    multiplier: ${MULTIPLIER}
+    batch_size: ${BATCH_SIZE}
+
+# Стадия 3: Вторая трансформация - добавление префикса
+transform_prefix:
+  type: "simple-transform"
+  depends_on: ["transform_multiply"]
+  config:
+    source_stage: "transform_multiply"
+    operations: ["add_prefix", "uppercase"]
+    prefix: ${PREFIX}
+    batch_size: ${BATCH_SIZE}
+
+# Стадия 4: Фильтрация данных
+filter_positive:
+  type: "simple-transform"
+  depends_on: ["transform_prefix"]
+  config:
+    source_stage: "transform_prefix"
+    operations: ["filter_positive"]
+    batch_size: ${BATCH_SIZE}
+
+# Стадия 5: Валидация результатов
+validate_results:
+  type: "simple-validator"
+  depends_on: ["filter_positive"]
+  config:
+    source_stage: "filter_positive"
+    min_records: 1
+    max_records: 1000
+    validation_rules:
+      - "all_positive"
+      - "non_empty"
+
+# Стадия 6: Сохранение результатов (может выполняться параллельно с валидацией)
+save_results:
+  type: "simple-saver"
+  depends_on: ["filter_positive"]
+  parallel: true
+  config:
+    source_stage: "filter_positive"
+    output_format: "json"
+    output_path: "/tmp/pipeline_results_${ENV}.json"

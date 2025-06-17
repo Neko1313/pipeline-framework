@@ -1,0 +1,68 @@
+repos:
+  # Ruff для форматирования и линтинга
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      # Линтер (заменяет isort, flake8, pyupgrade и др.)
+      - id: ruff
+        args: [--fix]
+        types_or: [python, pyi]
+      # Форматтер (заменяет black)
+      - id: ruff-format
+        types_or: [python, pyi]
+
+  # Pyright для проверки типов
+  - repo: https://github.com/RobertCraigie/pyright-python
+    rev: v1.1.383
+    hooks:
+      - id: pyright
+
+  # Встроенные хуки pre-commit
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-added-large-files
+        args: ['--maxkb=1000']
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: check-yaml
+        args: ['--unsafe']  # Для YAML с пользовательскими тегами
+      - id: check-toml
+      - id: check-json
+      - id: check-ast
+      - id: check-builtin-literals
+      - id: check-docstring-first
+      - id: debug-statements
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+      - id: mixed-line-ending
+        args: ['--fix=lf']
+
+  # Проверка безопасности
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.7.10
+    hooks:
+      - id: bandit
+        args: [-c, pyproject.toml]
+        additional_dependencies: ["bandit[toml]"]
+
+  # Проверка порядка импортов в __init__.py
+  - repo: https://github.com/asottile/reorder-python-imports
+    rev: v3.13.0
+    hooks:
+      - id: reorder-python-imports
+        args: [--py311-plus]
+        files: __init__\.py$
+
+ci:
+  autofix_commit_msg: |
+    [pre-commit.ci] auto fixes from pre-commit.com hooks
+
+    for more information, see https://pre-commit.ci
+  autofix_prs: true
+  autoupdate_branch: ''
+  autoupdate_commit_msg: '[pre-commit.ci] pre-commit autoupdate'
+  autoupdate_schedule: weekly
+  skip: [pyright]  # Pyright требует установленных зависимостей
+  submodules: false
