@@ -1,6 +1,7 @@
 """
 Базовые классы для компонентов извлечения данных
 """
+
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, AsyncGenerator, Union
 from pathlib import Path
@@ -14,13 +15,14 @@ from pipeline_core import (
     ExecutionResult,
     ExecutionStatus,
     ComponentType,
-    get_pipeline_logger
+    get_pipeline_logger,
 )
 from pydantic import BaseModel, Field, field_validator
 
 
 class ExtractorConfig(ComponentConfig):
     """Базовая конфигурация для всех экстракторов"""
+
     type: str = Field(..., description="Тип экстрактора")
 
     # Общие параметры
@@ -31,19 +33,21 @@ class ExtractorConfig(ComponentConfig):
     # Retry параметры
     retry_attempts: int = Field(default=3, description="Количество попыток повтора")
     retry_delay: float = Field(default=1.0, description="Задержка между повторами")
-    retry_exponential_base: float = Field(default=2.0, description="База для экспоненциальной задержки")
+    retry_exponential_base: float = Field(
+        default=2.0, description="База для экспоненциальной задержки"
+    )
 
     # Выходной формат
     output_format: str = Field(default="pandas", description="Формат выходных данных")
 
-    @field_validator('batch_size')
+    @field_validator("batch_size")
     @classmethod
     def validate_batch_size(cls, v: int) -> int:
         if v <= 0:
             raise ValueError("batch_size должен быть положительным числом")
         return v
 
-    @field_validator('output_format')
+    @field_validator("output_format")
     @classmethod
     def validate_output_format(cls, v: str) -> str:
         allowed_formats = ["pandas", "polars", "dict", "list"]
@@ -67,8 +71,7 @@ class BaseExtractor(BaseComponent, ABC):
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         self.logger = get_pipeline_logger(
-            f"extractor.{self.config.type}",
-            component_type=self.config.type
+            f"extractor.{self.config.type}", component_type=self.config.type
         )
 
     def get_component_type(self) -> ComponentType:
@@ -99,11 +102,11 @@ class BaseExtractor(BaseComponent, ABC):
 
             # Применяем лимиты если заданы
             if config.max_records and len(formatted_data) > config.max_records:
-                formatted_data = formatted_data[:config.max_records]
+                formatted_data = formatted_data[: config.max_records]
                 self.logger.warning(f"Ограничено до {config.max_records} записей")
 
             execution_time = time.time() - start_time
-            processed_records = len(formatted_data) if hasattr(formatted_data, '__len__') else 1
+            processed_records = len(formatted_data) if hasattr(formatted_data, "__len__") else 1
 
             self.logger.info(
                 f"Извлечение завершено успешно. "
@@ -119,8 +122,8 @@ class BaseExtractor(BaseComponent, ABC):
                     "extractor_type": config.type,
                     "output_format": config.output_format,
                     "batch_size": config.batch_size,
-                    "records_limit": config.max_records
-                }
+                    "records_limit": config.max_records,
+                },
             )
 
         except Exception as e:
@@ -131,10 +134,7 @@ class BaseExtractor(BaseComponent, ABC):
                 status=ExecutionStatus.FAILED,
                 error_message=str(e),
                 execution_time=execution_time,
-                metadata={
-                    "extractor_type": config.type,
-                    "error_type": type(e).__name__
-                }
+                metadata={"extractor_type": config.type, "error_type": type(e).__name__},
             )
         finally:
             # Очистка ресурсов
@@ -176,10 +176,9 @@ class BaseExtractor(BaseComponent, ABC):
                 if attempt == config.retry_attempts:
                     break
 
-                delay = config.retry_delay * (config.retry_exponential_base ** attempt)
+                delay = config.retry_delay * (config.retry_exponential_base**attempt)
                 self.logger.warning(
-                    f"Попытка {attempt + 1} неудачна: {e}. "
-                    f"Повтор через {delay:.2f} сек"
+                    f"Попытка {attempt + 1} неудачна: {e}. Повтор через {delay:.2f} сек"
                 )
                 time.sleep(delay)
 
@@ -204,7 +203,7 @@ class BaseExtractor(BaseComponent, ABC):
 
         if isinstance(data, pd.DataFrame):
             return data
-        elif hasattr(data, 'to_pandas'):  # Polars DataFrame
+        elif hasattr(data, "to_pandas"):  # Polars DataFrame
             return data.to_pandas()
         elif isinstance(data, list):
             return pd.DataFrame(data)
@@ -217,9 +216,9 @@ class BaseExtractor(BaseComponent, ABC):
         """Конвертация в polars DataFrame"""
         import polars as pl
 
-        if hasattr(data, '__class__') and 'polars' in str(type(data)):
+        if hasattr(data, "__class__") and "polars" in str(type(data)):
             return data
-        elif hasattr(data, 'to_polars'):  # Pandas DataFrame
+        elif hasattr(data, "to_polars"):  # Pandas DataFrame
             return pl.from_pandas(data)
         elif isinstance(data, list):
             return pl.DataFrame(data)
@@ -232,8 +231,8 @@ class BaseExtractor(BaseComponent, ABC):
         """Конвертация в список словарей"""
         if isinstance(data, list) and all(isinstance(item, dict) for item in data):
             return data
-        elif hasattr(data, 'to_dict'):  # DataFrame
-            return data.to_dict('records')
+        elif hasattr(data, "to_dict"):  # DataFrame
+            return data.to_dict("records")
         elif isinstance(data, dict):
             return [data]
         else:
@@ -243,9 +242,9 @@ class BaseExtractor(BaseComponent, ABC):
         """Конвертация в список"""
         if isinstance(data, list):
             return data
-        elif hasattr(data, 'values'):  # DataFrame
+        elif hasattr(data, "values"):  # DataFrame
             return data.values.tolist()
-        elif hasattr(data, 'to_list'):  # Series или аналог
+        elif hasattr(data, "to_list"):  # Series или аналог
             return data.to_list()
         else:
             return [data]

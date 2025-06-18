@@ -2,6 +2,7 @@
 """
 Демонстрация работы компонентов extractors и transformers
 """
+
 import tempfile
 import pandas as pd
 from pathlib import Path
@@ -9,22 +10,25 @@ import sys
 import os
 
 # Добавляем пути к компонентам для импорта
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "packages", "pipeline-core", "src"))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "packages", "components", "extractors", "src"))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "packages", "components", "transformers", "src"))
+sys.path.insert(
+    0, os.path.join(os.path.dirname(__file__), "..", "packages", "pipeline-core", "src")
+)
+sys.path.insert(
+    0, os.path.join(os.path.dirname(__file__), "..", "packages", "components", "extractors", "src")
+)
+sys.path.insert(
+    0,
+    os.path.join(os.path.dirname(__file__), "..", "packages", "components", "transformers", "src"),
+)
 
 # Импорты из pipeline-core
-from pipeline_core import (
-    ExecutionContext,
-    ExecutionStatus,
-    PipelineYAMLParser,
-    get_registry
-)
+from pipeline_core import ExecutionContext, ExecutionStatus, PipelineYAMLParser, get_registry
 
 # Импорты компонентов
 try:
     from pipeline_extractors import CSVExtractor
     from pipeline_transformers import DataTransformerComponent
+
     extractors_available = True
 except ImportError as e:
     print(f"⚠️  Компоненты не найдены: {e}")
@@ -34,16 +38,16 @@ except ImportError as e:
 def create_sample_data():
     """Создание примера CSV файла для тестирования"""
     # Создаем временный CSV файл
-    temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False)
+    temp_file = tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False)
 
     # Генерируем тестовые данные
     data = {
-        'id': range(1, 101),
-        'name': [f'User_{i}' for i in range(1, 101)],
-        'age': [20 + (i % 50) for i in range(100)],
-        'salary': [30000 + (i * 1000) for i in range(100)],
-        'department': ['IT', 'HR', 'Finance', 'Marketing', 'Sales'] * 20,
-        'active': [True if i % 3 != 0 else False for i in range(100)]
+        "id": range(1, 101),
+        "name": [f"User_{i}" for i in range(1, 101)],
+        "age": [20 + (i % 50) for i in range(100)],
+        "salary": [30000 + (i * 1000) for i in range(100)],
+        "department": ["IT", "HR", "Finance", "Marketing", "Sales"] * 20,
+        "active": [True if i % 3 != 0 else False for i in range(100)],
     }
 
     df = pd.DataFrame(data)
@@ -72,7 +76,7 @@ def test_csv_extractor():
             "file_path": csv_file,
             "delimiter": ",",
             "has_header": True,
-            "output_format": "pandas"
+            "output_format": "pandas",
         }
 
         # Создаем экстрактор
@@ -110,23 +114,19 @@ def test_data_transformer(input_data):
     config = {
         "type": "data-transformer",
         "source_stage": "extract",  # Ссылка на стадию
-
         # Операции трансформации
         "add_columns": {
             "salary_monthly": "salary / 12",
             "is_senior": "age >= 40",
-            "full_info": "name + ' (' + department + ')'"
+            "full_info": "name + ' (' + department + ')'",
         },
         "filter_expression": "active == True and salary > 40000",
         "drop_columns": ["id"],
-        "rename_columns": {
-            "name": "employee_name",
-            "department": "dept"
-        },
+        "rename_columns": {"name": "employee_name", "department": "dept"},
         "sort_by": ["salary"],
         "sort_ascending": False,
         "sample_n": 20,
-        "output_format": "pandas"
+        "output_format": "pandas",
     }
 
     # Создаем трансформер
@@ -135,10 +135,9 @@ def test_data_transformer(input_data):
     # Подготавливаем контекст с данными
     context = ExecutionContext()
     from pipeline_core import ExecutionResult, ExecutionStatus
+
     extract_result = ExecutionResult(
-        status=ExecutionStatus.SUCCESS,
-        data=input_data,
-        processed_records=len(input_data)
+        status=ExecutionStatus.SUCCESS, data=input_data, processed_records=len(input_data)
     )
     context.set_stage_result("extract", extract_result)
 
@@ -233,10 +232,7 @@ def test_yaml_pipeline():
                     print(f"\n▶️  Выполнение стадии: {stage_name}")
 
                     # Создаем компонент
-                    component = registry.create_component(
-                        stage_config.type,
-                        stage_config.config
-                    )
+                    component = registry.create_component(stage_config.type, stage_config.config)
 
                     # Выполняем
                     result = component.execute(context)
@@ -289,6 +285,7 @@ def main():
     except Exception as e:
         print(f"\n❌ Ошибка при выполнении тестов: {e}")
         import traceback
+
         traceback.print_exc()
 
 

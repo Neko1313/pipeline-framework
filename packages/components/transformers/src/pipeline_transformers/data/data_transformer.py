@@ -1,6 +1,7 @@
 """
 Data Transformer - базовые операции трансформации данных
 """
+
 from typing import Any, Dict, List, Optional, Union, Callable
 import pandas as pd
 import numpy as np
@@ -12,23 +13,32 @@ from pydantic import Field, field_validator
 
 class DataTransformerConfig(TransformerConfig):
     """Конфигурация базового трансформера данных"""
+
     type: str = Field(default="data-transformer", const=True)
 
     # Операции с колонками
-    add_columns: Optional[Dict[str, str]] = Field(None, description="Добавить колонки: {name: expression}")
+    add_columns: Optional[Dict[str, str]] = Field(
+        None, description="Добавить колонки: {name: expression}"
+    )
     drop_columns: Optional[List[str]] = Field(None, description="Удалить колонки")
     rename_columns: Optional[Dict[str, str]] = Field(None, description="Переименовать колонки")
 
     # Фильтрация данных
-    filter_expression: Optional[str] = Field(None, description="Pandas query выражение для фильтрации")
+    filter_expression: Optional[str] = Field(
+        None, description="Pandas query выражение для фильтрации"
+    )
 
     # Обработка пропущенных значений
     fill_na_strategy: str = Field(default="keep", description="Стратегия обработки NaN")
-    fill_na_value: Optional[Union[str, int, float]] = Field(None, description="Значение для заполнения NaN")
+    fill_na_value: Optional[Union[str, int, float]] = Field(
+        None, description="Значение для заполнения NaN"
+    )
     drop_na: bool = Field(default=False, description="Удалить строки с NaN")
 
     # Типы данных
-    convert_dtypes: Optional[Dict[str, str]] = Field(None, description="Преобразование типов данных")
+    convert_dtypes: Optional[Dict[str, str]] = Field(
+        None, description="Преобразование типов данных"
+    )
 
     # Сортировка
     sort_by: Optional[List[str]] = Field(None, description="Колонки для сортировки")
@@ -36,22 +46,33 @@ class DataTransformerConfig(TransformerConfig):
 
     # Дедупликация
     drop_duplicates: bool = Field(default=False, description="Удалить дубликаты")
-    duplicate_subset: Optional[List[str]] = Field(None, description="Колонки для определения дубликатов")
+    duplicate_subset: Optional[List[str]] = Field(
+        None, description="Колонки для определения дубликатов"
+    )
 
     # Сэмплирование
     sample_n: Optional[int] = Field(None, description="Взять N случайных записей")
     sample_frac: Optional[float] = Field(None, description="Взять долю записей")
     random_state: int = Field(default=42, description="Seed для воспроизводимости")
 
-    @field_validator('fill_na_strategy')
+    @field_validator("fill_na_strategy")
     @classmethod
     def validate_fill_na_strategy(cls, v: str) -> str:
-        allowed_strategies = ["keep", "drop", "mean", "median", "mode", "forward", "backward", "value"]
+        allowed_strategies = [
+            "keep",
+            "drop",
+            "mean",
+            "median",
+            "mode",
+            "forward",
+            "backward",
+            "value",
+        ]
         if v not in allowed_strategies:
             raise ValueError(f"fill_na_strategy должен быть одним из: {allowed_strategies}")
         return v
 
-    @field_validator('sample_frac')
+    @field_validator("sample_frac")
     @classmethod
     def validate_sample_frac(cls, v: Optional[float]) -> Optional[float]:
         if v is not None and (v <= 0 or v > 1):
@@ -82,12 +103,12 @@ class DataTransformerComponent(DataTransformer):
         # Конвертируем в pandas DataFrame для удобства работы
         if isinstance(data, list):
             df = pd.DataFrame(data)
-        elif hasattr(data, 'to_pandas'):
+        elif hasattr(data, "to_pandas"):
             df = data.to_pandas()
         elif isinstance(data, dict):
             df = pd.DataFrame([data])
         else:
-            df = data.copy() if hasattr(data, 'copy') else data
+            df = data.copy() if hasattr(data, "copy") else data
 
         self.logger.info(f"Начальные данные: {df.shape[0]} строк, {df.shape[1]} колонок")
 
@@ -106,7 +127,9 @@ class DataTransformerComponent(DataTransformer):
 
         return df
 
-    def _handle_missing_values(self, df: pd.DataFrame, config: DataTransformerConfig) -> pd.DataFrame:
+    def _handle_missing_values(
+        self, df: pd.DataFrame, config: DataTransformerConfig
+    ) -> pd.DataFrame:
         """Обработка пропущенных значений"""
         if config.fill_na_strategy == "keep":
             return df
@@ -133,9 +156,9 @@ class DataTransformerComponent(DataTransformer):
                 if not mode_value.empty:
                     df[column] = df[column].fillna(mode_value.iloc[0])
         elif config.fill_na_strategy == "forward":
-            df = df.fillna(method='ffill')
+            df = df.fillna(method="ffill")
         elif config.fill_na_strategy == "backward":
-            df = df.fillna(method='bfill')
+            df = df.fillna(method="bfill")
         elif config.fill_na_strategy == "value" and config.fill_na_value is not None:
             df = df.fillna(config.fill_na_value)
 
@@ -152,13 +175,15 @@ class DataTransformerComponent(DataTransformer):
                     if dtype.lower() == "datetime":
                         df[column] = pd.to_datetime(df[column])
                     elif dtype.lower() == "category":
-                        df[column] = df[column].astype('category')
+                        df[column] = df[column].astype("category")
                     else:
                         df[column] = df[column].astype(dtype)
 
                     self.logger.debug(f"Конвертирована колонка '{column}' в тип '{dtype}'")
                 except Exception as e:
-                    self.logger.warning(f"Не удалось конвертировать колонку '{column}' в тип '{dtype}': {e}")
+                    self.logger.warning(
+                        f"Не удалось конвертировать колонку '{column}' в тип '{dtype}': {e}"
+                    )
 
         return df
 
@@ -222,7 +247,9 @@ class DataTransformerComponent(DataTransformer):
             filtered_rows = initial_rows - len(df)
 
             if filtered_rows > 0:
-                self.logger.info(f"Отфильтровано {filtered_rows} строк по условию: {config.filter_expression}")
+                self.logger.info(
+                    f"Отфильтровано {filtered_rows} строк по условию: {config.filter_expression}"
+                )
         except Exception as e:
             self.logger.warning(f"Не удалось применить фильтр '{config.filter_expression}': {e}")
 
@@ -284,7 +311,7 @@ class DataTransformerComponent(DataTransformer):
                 self.logger.info(f"Взято {sample_size} случайных записей")
             elif config.sample_frac is not None:
                 df = df.sample(frac=config.sample_frac, random_state=config.random_state)
-                self.logger.info(f"Взято {config.sample_frac*100:.1f}% записей ({len(df)} строк)")
+                self.logger.info(f"Взято {config.sample_frac * 100:.1f}% записей ({len(df)} строк)")
         except Exception as e:
             self.logger.warning(f"Не удалось выполнить сэмплирование: {e}")
 

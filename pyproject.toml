@@ -1,0 +1,214 @@
+# pyproject.toml - корневой workspace файл для Pipeline Framework
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pipeline-framework"
+description = "Полноценный фреймворк для создания data pipeline с модульной архитектурой"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "Pipeline Framework Team", email = "team@example.com" },
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Distributed Computing",
+    "Topic :: Database",
+    "Topic :: Scientific/Engineering",
+]
+keywords = ["pipeline", "etl", "data-processing", "workflow", "orchestration"]
+requires-python = ">=3.11"
+version = "0.1.0"  # Статическая версия для workspace
+
+# Базовые зависимости для всего фреймворка
+dependencies = [
+    "pipeline-core",
+]
+
+[project.optional-dependencies]
+# Группы компонентов
+extractors = [
+    "pipeline-extractors[files]",
+]
+extractors-full = [
+    "pipeline-extractors[formats,api]",
+]
+# transformers = [
+#     "pipeline-transformers",
+# ]
+# transformers-full = [
+#     "pipeline-transformers[all]",
+# ]
+
+# Группы по функциональности
+files = [
+    "pipeline-extractors[files,formats]",
+]
+api = [
+    "pipeline-extractors[api]",
+]
+
+# Полные наборы
+recommended = [
+    "pipeline-framework[extractors]",
+]
+
+# Development зависимости
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.6.0",
+    "pyright>=1.1.380",
+    "pre-commit>=3.4.0",
+    "mkdocs>=1.5.0",
+    "mkdocs-material>=9.2.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/your-org/pipeline-framework"
+Documentation = "https://pipeline-framework.readthedocs.io"
+Repository = "https://github.com/your-org/pipeline-framework"
+Issues = "https://github.com/your-org/pipeline-framework/issues"
+Changelog = "https://github.com/your-org/pipeline-framework/blob/main/CHANGELOG.md"
+
+# Workspace конфигурация для uv
+[tool.uv.workspace]
+members = [
+    "packages/pipeline-core",
+    "packages/components/extractors",
+    # "packages/components/transformers",  # Временно отключено
+]
+
+# Указываем sources для workspace dependencies
+[tool.uv.sources]
+pipeline-core = { workspace = true }
+pipeline-extractors = { workspace = true }
+# pipeline-transformers = { workspace = true }  # Временно отключено
+
+# Указываем что это workspace без собственного кода
+[tool.hatch.build.targets.wheel]
+bypass-selection = true
+
+# Конфигурация ruff для всего workspace
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+extend-include = ["*.ipynb"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+    "SIM", # flake8-simplify
+    "TCH", # flake8-type-checking
+    "PTH", # flake8-use-pathlib
+    "RUF", # ruff-specific rules
+]
+ignore = [
+    "E501",  # line too long, handled by formatter
+    "B008",  # do not perform function calls in argument defaults
+    "C901",  # too complex
+    "SIM108", # use ternary operator
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"tests/**/*" = ["B011", "S101"]
+"examples/**/*" = ["T201", "T203", "S101"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+[tool.ruff.lint.isort]
+known-first-party = ["pipeline_core", "pipeline_extractors", "pipeline_transformers"]
+force-single-line = false
+
+# Конфигурация pyright для всего workspace
+[tool.pyright]
+include = [
+    "packages/*/src",
+    "packages/*/tests",
+    "examples"
+]
+exclude = [
+    "**/__pycache__",
+    "**/.pytest_cache",
+    "**/node_modules",
+    "**/.venv",
+    "**/venv",
+    "**/build",
+    "**/dist"
+]
+pythonVersion = "3.11"
+pythonPlatform = "All"
+typeCheckingMode = "strict"
+
+# Workspace настройки
+reportMissingImports = true
+reportMissingTypeStubs = false
+reportUnusedImport = true
+reportUnusedClass = true
+reportUnusedFunction = true
+reportUnusedVariable = true
+
+# Конфигурация pytest для всего workspace
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra -q --strict-markers --strict-config"
+testpaths = [
+    "packages/*/tests",
+    "tests",
+]
+filterwarnings = [
+    "error",
+    "ignore::UserWarning",
+    "ignore::DeprecationWarning",
+]
+markers = [
+    "slow: marks tests as slow",
+    "integration: marks tests as integration tests",
+    "unit: marks tests as unit tests",
+    "e2e: marks tests as end-to-end tests",
+]
+
+# Конфигурация coverage для всего workspace
+[tool.coverage.run]
+source = ["packages/*/src"]
+branch = true
+parallel = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if self\\.debug",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if 0:",
+    "if __name__ == .__main__.:",
+    "@(abc\\.)?abstractmethod",
+]
+ignore_errors = true
+
+[tool.coverage.html]
+directory = "htmlcov"
+
+# Конфигурация bandit для безопасности
+[tool.bandit]
+exclude_dirs = ["tests", "examples"]
+skips = ["B101", "B601"]

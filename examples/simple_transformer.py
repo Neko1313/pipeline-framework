@@ -27,16 +27,12 @@ class SimpleTransformConfig(ComponentConfig):
 
     # Параметры трансформации
     operations: List[str] = Field(default_factory=list, description="Список операций")
-    multiplier: float = Field(
-        default=1.0, description="Множитель для числовых значений"
-    )
+    multiplier: float = Field(default=1.0, description="Множитель для числовых значений")
     prefix: str = Field(default="", description="Префикс для строковых значений")
 
     # Настройки
     batch_size: int = Field(default=1000, description="Размер batch для обработки")
-    validate_output: bool = Field(
-        default=True, description="Валидировать выходные данные"
-    )
+    validate_output: bool = Field(default=True, description="Валидировать выходные данные")
 
 
 @register_component("simple-transform")
@@ -78,9 +74,7 @@ class SimpleTransformComponent(BaseComponent):
             if source_data is None:
                 raise ValueError(f"Данные от стадии '{config.source_stage}' не найдены")
 
-            self.logger.info(
-                f"Начало трансформации данных от стадии '{config.source_stage}'"
-            )
+            self.logger.info(f"Начало трансформации данных от стадии '{config.source_stage}'")
 
             # Выполняем трансформации
             transformed_data = self._transform_data(source_data, config)
@@ -90,9 +84,7 @@ class SimpleTransformComponent(BaseComponent):
                 self._validate_output(transformed_data)
 
             execution_time = time.time() - start_time
-            processed_records = (
-                len(transformed_data) if hasattr(transformed_data, "__len__") else 1
-            )
+            processed_records = len(transformed_data) if hasattr(transformed_data, "__len__") else 1
 
             self.logger.info(
                 f"Трансформация завершена успешно. "
@@ -136,9 +128,7 @@ class SimpleTransformComponent(BaseComponent):
         else:
             return self._transform_value(data, config)
 
-    def _transform_list(
-        self, data_list: List[Any], config: SimpleTransformConfig
-    ) -> List[Any]:
+    def _transform_list(self, data_list: List[Any], config: SimpleTransformConfig) -> List[Any]:
         """Трансформация списка данных"""
         result = []
 

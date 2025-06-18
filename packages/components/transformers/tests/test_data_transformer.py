@@ -1,6 +1,7 @@
 """
 Тесты для Data трансформера
 """
+
 import pytest
 import pandas as pd
 import numpy as np
@@ -15,23 +16,23 @@ class TestDataTransformer:
     @pytest.fixture
     def sample_data(self):
         """Создание тестовых данных"""
-        return pd.DataFrame({
-            'name': ['Alice', 'Bob', 'Charlie', 'Diana', 'Eve'],
-            'age': [25, 30, 35, 28, 32],
-            'salary': [50000, 60000, 70000, 55000, 65000],
-            'department': ['IT', 'HR', 'Finance', 'IT', 'Marketing'],
-            'active': [True, True, False, True, True],
-            'score': [85.5, 90.0, None, 88.0, 92.5]
-        })
+        return pd.DataFrame(
+            {
+                "name": ["Alice", "Bob", "Charlie", "Diana", "Eve"],
+                "age": [25, 30, 35, 28, 32],
+                "salary": [50000, 60000, 70000, 55000, 65000],
+                "department": ["IT", "HR", "Finance", "IT", "Marketing"],
+                "active": [True, True, False, True, True],
+                "score": [85.5, 90.0, None, 88.0, 92.5],
+            }
+        )
 
     @pytest.fixture
     def execution_context(self, sample_data):
         """Создание контекста выполнения с данными"""
         context = ExecutionContext()
         result = ExecutionResult(
-            status=ExecutionStatus.SUCCESS,
-            data=sample_data,
-            processed_records=len(sample_data)
+            status=ExecutionStatus.SUCCESS, data=sample_data, processed_records=len(sample_data)
         )
         context.set_stage_result("extract", result)
         return context
@@ -39,19 +40,13 @@ class TestDataTransformer:
     def test_data_transformer_config_validation(self):
         """Тест валидации конфигурации"""
         # Валидная конфигурация
-        config = DataTransformerConfig(
-            type="data-transformer",
-            source_stage="extract"
-        )
+        config = DataTransformerConfig(type="data-transformer", source_stage="extract")
         assert config.type == "data-transformer"
         assert config.source_stage == "extract"
 
         # Невалидная конфигурация - пустой source_stage
         with pytest.raises(ValueError):
-            DataTransformerConfig(
-                type="data-transformer",
-                source_stage=""
-            )
+            DataTransformerConfig(type="data-transformer", source_stage="")
 
     def test_add_columns(self, execution_context):
         """Тест добавления колонок"""
@@ -61,8 +56,8 @@ class TestDataTransformer:
             "add_columns": {
                 "annual_salary": "salary * 12",
                 "age_group": "age > 30",
-                "name_length": "name.str.len()"
-            }
+                "name_length": "name.str.len()",
+            },
         }
 
         transformer = DataTransformerComponent(config)
@@ -76,14 +71,14 @@ class TestDataTransformer:
         # Проверяем значения
         assert result.data.iloc[0]["annual_salary"] == 50000 * 12
         assert result.data.iloc[1]["age_group"] == False  # Bob, 30 лет
-        assert result.data.iloc[2]["age_group"] == True   # Charlie, 35 лет
+        assert result.data.iloc[2]["age_group"] == True  # Charlie, 35 лет
 
     def test_drop_columns(self, execution_context):
         """Тест удаления колонок"""
         config = {
             "type": "data-transformer",
             "source_stage": "extract",
-            "drop_columns": ["score", "active"]
+            "drop_columns": ["score", "active"],
         }
 
         transformer = DataTransformerComponent(config)
@@ -99,10 +94,7 @@ class TestDataTransformer:
         config = {
             "type": "data-transformer",
             "source_stage": "extract",
-            "rename_columns": {
-                "name": "employee_name",
-                "department": "dept"
-            }
+            "rename_columns": {"name": "employee_name", "department": "dept"},
         }
 
         transformer = DataTransformerComponent(config)
@@ -119,7 +111,7 @@ class TestDataTransformer:
         config = {
             "type": "data-transformer",
             "source_stage": "extract",
-            "filter_expression": "active == True and salary > 55000"
+            "filter_expression": "active == True and salary > 55000",
         }
 
         transformer = DataTransformerComponent(config)
@@ -132,11 +124,7 @@ class TestDataTransformer:
 
     def test_fill_na_mean(self, execution_context):
         """Тест заполнения пропущенных значений средним"""
-        config = {
-            "type": "data-transformer",
-            "source_stage": "extract",
-            "fill_na_strategy": "mean"
-        }
+        config = {"type": "data-transformer", "source_stage": "extract", "fill_na_strategy": "mean"}
 
         transformer = DataTransformerComponent(config)
         result = transformer.execute(execution_context)
@@ -154,7 +142,7 @@ class TestDataTransformer:
             "type": "data-transformer",
             "source_stage": "extract",
             "fill_na_strategy": "value",
-            "fill_na_value": 0
+            "fill_na_value": 0,
         }
 
         transformer = DataTransformerComponent(config)
@@ -170,7 +158,7 @@ class TestDataTransformer:
             "type": "data-transformer",
             "source_stage": "extract",
             "sort_by": ["salary"],
-            "sort_ascending": False
+            "sort_ascending": False,
         }
 
         transformer = DataTransformerComponent(config)
@@ -191,17 +179,11 @@ class TestDataTransformer:
 
         # Обновляем контекст
         result = ExecutionResult(
-            status=ExecutionStatus.SUCCESS,
-            data=data_with_dup,
-            processed_records=len(data_with_dup)
+            status=ExecutionStatus.SUCCESS, data=data_with_dup, processed_records=len(data_with_dup)
         )
         execution_context.set_stage_result("extract", result)
 
-        config = {
-            "type": "data-transformer",
-            "source_stage": "extract",
-            "drop_duplicates": True
-        }
+        config = {"type": "data-transformer", "source_stage": "extract", "drop_duplicates": True}
 
         transformer = DataTransformerComponent(config)
         result = transformer.execute(execution_context)
@@ -215,7 +197,7 @@ class TestDataTransformer:
             "type": "data-transformer",
             "source_stage": "extract",
             "sample_n": 3,
-            "random_state": 42
+            "random_state": 42,
         }
 
         transformer = DataTransformerComponent(config)
@@ -230,10 +212,7 @@ class TestDataTransformer:
         config = {
             "type": "data-transformer",
             "source_stage": "extract",
-            "convert_dtypes": {
-                "age": "float64",
-                "department": "category"
-            }
+            "convert_dtypes": {"age": "float64", "department": "category"},
         }
 
         transformer = DataTransformerComponent(config)
@@ -256,7 +235,7 @@ class TestDataTransformer:
             "rename_columns": {"name": "employee_name"},
             "sort_by": ["salary"],
             "sort_ascending": False,
-            "fill_na_strategy": "drop"
+            "fill_na_strategy": "drop",
         }
 
         transformer = DataTransformerComponent(config)
@@ -275,10 +254,7 @@ class TestDataTransformer:
 
     def test_error_handling(self, execution_context):
         """Тест обработки ошибок"""
-        config = {
-            "type": "data-transformer",
-            "source_stage": "nonexistent_stage"
-        }
+        config = {"type": "data-transformer", "source_stage": "nonexistent_stage"}
 
         transformer = DataTransformerComponent(config)
         result = transformer.execute(execution_context)

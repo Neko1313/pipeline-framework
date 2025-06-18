@@ -1,6 +1,7 @@
 """
 Базовые классы для компонентов трансформации данных
 """
+
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Union, Callable
 import time
@@ -14,13 +15,14 @@ from pipeline_core import (
     ExecutionResult,
     ExecutionStatus,
     ComponentType,
-    get_pipeline_logger
+    get_pipeline_logger,
 )
 from pydantic import BaseModel, Field, field_validator
 
 
 class TransformerConfig(ComponentConfig):
     """Базовая конфигурация для всех трансформеров"""
+
     type: str = Field(..., description="Тип трансформера")
 
     # Источник данных
@@ -42,14 +44,14 @@ class TransformerConfig(ComponentConfig):
     # Выходной формат
     output_format: str = Field(default="pandas", description="Формат выходных данных")
 
-    @field_validator('source_stage')
+    @field_validator("source_stage")
     @classmethod
     def validate_source_stage(cls, v: str) -> str:
         if not v or not isinstance(v, str):
             raise ValueError("source_stage должен быть непустой строкой")
         return v.strip()
 
-    @field_validator('error_handling')
+    @field_validator("error_handling")
     @classmethod
     def validate_error_handling(cls, v: str) -> str:
         allowed_strategies = ["raise", "skip", "default", "log"]
@@ -57,7 +59,7 @@ class TransformerConfig(ComponentConfig):
             raise ValueError(f"error_handling должен быть одним из: {allowed_strategies}")
         return v
 
-    @field_validator('output_format')
+    @field_validator("output_format")
     @classmethod
     def validate_output_format(cls, v: str) -> str:
         allowed_formats = ["pandas", "polars", "dict", "list"]
@@ -82,8 +84,7 @@ class BaseTransformer(BaseComponent, ABC):
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         self.logger = get_pipeline_logger(
-            f"transformer.{self.config.type}",
-            component_type=self.config.type
+            f"transformer.{self.config.type}", component_type=self.config.type
         )
 
     def get_component_type(self) -> ComponentType:
@@ -155,8 +156,8 @@ class BaseTransformer(BaseComponent, ABC):
                     "source_stage": config.source_stage,
                     "output_format": config.output_format,
                     "batch_size": config.batch_size,
-                    "parallel": config.parallel
-                }
+                    "parallel": config.parallel,
+                },
             )
 
         except Exception as e:
@@ -170,8 +171,8 @@ class BaseTransformer(BaseComponent, ABC):
                 metadata={
                     "transformer_type": config.type,
                     "source_stage": config.source_stage,
-                    "error_type": type(e).__name__
-                }
+                    "error_type": type(e).__name__,
+                },
             )
         finally:
             try:
@@ -200,12 +201,12 @@ class BaseTransformer(BaseComponent, ABC):
         # Конвертируем в DataFrame для удобства работы с batch'ами
         if isinstance(data, (list, dict)):
             df = pd.DataFrame(data)
-        elif hasattr(data, 'to_pandas'):
+        elif hasattr(data, "to_pandas"):
             df = data.to_pandas()
         else:
             df = data
 
-        if not hasattr(df, 'iloc'):
+        if not hasattr(df, "iloc"):
             # Если не DataFrame, используем обычную трансформацию
             return self.transform_data(data, context)
 
@@ -242,8 +243,9 @@ class BaseTransformer(BaseComponent, ABC):
         if results:
             if isinstance(results[0], pd.DataFrame):
                 return pd.concat(results, ignore_index=True)
-            elif hasattr(results[0], '__class__') and 'polars' in str(type(results[0])):
+            elif hasattr(results[0], "__class__") and "polars" in str(type(results[0])):
                 import polars as pl
+
                 return pl.concat(results)
             elif isinstance(results[0], list):
                 combined = []
@@ -265,12 +267,12 @@ class BaseTransformer(BaseComponent, ABC):
         # Конвертируем в DataFrame для разделения
         if isinstance(data, (list, dict)):
             df = pd.DataFrame(data)
-        elif hasattr(data, 'to_pandas'):
+        elif hasattr(data, "to_pandas"):
             df = data.to_pandas()
         else:
             df = data
 
-        if not hasattr(df, 'iloc'):
+        if not hasattr(df, "iloc"):
             # Если не DataFrame, используем обычную трансформацию
             return self.transform_data(data, context)
 
@@ -280,7 +282,7 @@ class BaseTransformer(BaseComponent, ABC):
         chunks = []
 
         for i in range(0, total_rows, chunk_size):
-            chunk = df.iloc[i:i + chunk_size]
+            chunk = df.iloc[i : i + chunk_size]
             chunks.append(chunk)
 
         # Параллельная обработка
@@ -308,8 +310,9 @@ class BaseTransformer(BaseComponent, ABC):
                 if results:
                     if isinstance(results[0], pd.DataFrame):
                         return pd.concat(results, ignore_index=True)
-                    elif hasattr(results[0], '__class__') and 'polars' in str(type(results[0])):
+                    elif hasattr(results[0], "__class__") and "polars" in str(type(results[0])):
                         import polars as pl
+
                         return pl.concat(results)
                     else:
                         combined = []
@@ -323,7 +326,9 @@ class BaseTransformer(BaseComponent, ABC):
                     return data
 
         except Exception as e:
-            self.logger.warning(f"Ошибка параллельной обработки, переключение на последовательную: {e}")
+            self.logger.warning(
+                f"Ошибка параллельной обработки, переключение на последовательную: {e}"
+            )
             return self.transform_data(data, context)
 
     def _transform_chunk_wrapper(self, chunk: Any, context: ExecutionContext) -> Any:
@@ -342,11 +347,11 @@ class BaseTransformer(BaseComponent, ABC):
         config: TransformerConfig = self.config
 
         # Используем batching если данных много
-        if hasattr(data, '__len__'):
+        if hasattr(data, "__len__"):
             return len(data) > config.batch_size
 
         # Для DataFrame проверяем количество строк
-        if hasattr(data, 'shape'):
+        if hasattr(data, "shape"):
             return data.shape[0] > config.batch_size
 
         return False
@@ -378,7 +383,7 @@ class BaseTransformer(BaseComponent, ABC):
         """Конвертация в pandas DataFrame"""
         if isinstance(data, pd.DataFrame):
             return data
-        elif hasattr(data, 'to_pandas'):  # Polars DataFrame
+        elif hasattr(data, "to_pandas"):  # Polars DataFrame
             return data.to_pandas()
         elif isinstance(data, list):
             return pd.DataFrame(data)
@@ -391,9 +396,9 @@ class BaseTransformer(BaseComponent, ABC):
         """Конвертация в polars DataFrame"""
         import polars as pl
 
-        if hasattr(data, '__class__') and 'polars' in str(type(data)):
+        if hasattr(data, "__class__") and "polars" in str(type(data)):
             return data
-        elif hasattr(data, 'to_polars'):  # Pandas DataFrame
+        elif hasattr(data, "to_polars"):  # Pandas DataFrame
             return pl.from_pandas(data)
         elif isinstance(data, list):
             return pl.DataFrame(data)
@@ -406,8 +411,8 @@ class BaseTransformer(BaseComponent, ABC):
         """Конвертация в список словарей"""
         if isinstance(data, list) and all(isinstance(item, dict) for item in data):
             return data
-        elif hasattr(data, 'to_dict'):  # DataFrame
-            return data.to_dict('records')
+        elif hasattr(data, "to_dict"):  # DataFrame
+            return data.to_dict("records")
         elif isinstance(data, dict):
             return [data]
         else:
@@ -417,18 +422,18 @@ class BaseTransformer(BaseComponent, ABC):
         """Конвертация в список"""
         if isinstance(data, list):
             return data
-        elif hasattr(data, 'values'):  # DataFrame
+        elif hasattr(data, "values"):  # DataFrame
             return data.values.tolist()
-        elif hasattr(data, 'to_list'):  # Series или аналог
+        elif hasattr(data, "to_list"):  # Series или аналог
             return data.to_list()
         else:
             return [data]
 
     def _count_records(self, data: Any) -> int:
         """Подсчет количества записей"""
-        if hasattr(data, '__len__') and not isinstance(data, str):
+        if hasattr(data, "__len__") and not isinstance(data, str):
             return len(data)
-        elif hasattr(data, 'shape'):
+        elif hasattr(data, "shape"):
             return data.shape[0]
         else:
             return 1
@@ -448,8 +453,9 @@ class DataTransformer(BaseTransformer):
     Предоставляет удобные методы для работы с DataFrame
     """
 
-    def apply_column_operation(self, data: pd.DataFrame, column: str,
-                             operation: Callable, **kwargs) -> pd.DataFrame:
+    def apply_column_operation(
+        self, data: pd.DataFrame, column: str, operation: Callable, **kwargs
+    ) -> pd.DataFrame:
         """Применение операции к колонке"""
         result = data.copy()
         try:
@@ -482,8 +488,9 @@ class DataTransformer(BaseTransformer):
                 self.logger.error(f"Ошибка фильтрации: {e}")
                 return data
 
-    def add_computed_column(self, data: pd.DataFrame, column_name: str,
-                          computation: Union[str, Callable], **kwargs) -> pd.DataFrame:
+    def add_computed_column(
+        self, data: pd.DataFrame, column_name: str, computation: Union[str, Callable], **kwargs
+    ) -> pd.DataFrame:
         """Добавление вычисляемой колонки"""
         result = data.copy()
         try:
@@ -503,8 +510,12 @@ class DataTransformer(BaseTransformer):
 
         return result
 
-    def aggregate_data(self, data: pd.DataFrame, group_by: List[str],
-                      aggregations: Dict[str, Union[str, List[str]]]) -> pd.DataFrame:
+    def aggregate_data(
+        self,
+        data: pd.DataFrame,
+        group_by: List[str],
+        aggregations: Dict[str, Union[str, List[str]]],
+    ) -> pd.DataFrame:
         """Агрегация данных"""
         try:
             return data.groupby(group_by).agg(aggregations).reset_index()

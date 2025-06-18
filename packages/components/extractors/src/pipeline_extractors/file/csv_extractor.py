@@ -1,302 +1,632 @@
+# packages/components/extractors/src/pipeline_extractors/file/csv_extractor.py
 """
-CSV Extractor - извлечение данных из CSV файлов
+Полноценный CSV экстрактор с расширенными возможностями
 """
-from typing import Any, Dict, List, Optional, AsyncGenerator, Union
-from pathlib import Path
-import pandas as pd
-import polars as pl
-import aiofiles
-import aiocsv
+
 import asyncio
-from urllib.parse import urlparse
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union, Literal
+import pandas as pd
+import numpy as np
+from pydantic import Field, field_validator, model_validator
+from datetime import datetime
+import logging
 
-from pipeline_core import ExecutionContext
-from ..base import BaseExtractor, StreamingExtractor, ExtractorConfig
-from pydantic import Field, field_validator
+try:
+    import polars as pl
+
+    POLARS_AVAILABLE = True
+except ImportError:
+    POLARS_AVAILABLE = False
+
+try:
+    import aiofiles
+    import aiocsv
+
+    ASYNC_AVAILABLE = True
+except ImportError:
+    ASYNC_AVAILABLE = False
+
+from pipeline_core import (
+    BaseComponent,
+    ComponentConfig,
+    ExecutionContext,
+    ExecutionResult,
+    ExecutionStatus,
+    ComponentType,
+    register_component,
+)
+from pipeline_core.exceptions.errors import (
+    PipelineConfigError,
+    PipelineDataError,
+    PipelineExecutionError,
+)
 
 
-class CSVExtractorConfig(ExtractorConfig):
-    """Конфигурация CSV экстрактора"""
-    type: str = Field(default="csv-extractor", const=True)
+class CSVExtractorConfig(ComponentConfig):
+    """Конфигурация полноценного CSV экстрактора"""
 
-    # Источник данных
-    file_path: str = Field(..., description="Путь к CSV файлу или URL")
+    type: str = Field(default="csv-extractor", frozen=True)
 
-    # CSV параметры
-    delimiter: str = Field(default=",", description="Разделитель CSV")
+    # === ОСНОВНЫЕ ПАРАМЕТРЫ ФАЙЛА ===
+    file_path: Union[str, Path] = Field(description="Путь к CSV файлу")
+
+    # === ПАРАМЕТРЫ ПАРСИНГА ===
+    delimiter: str = Field(default=",", description="Разделитель колонок")
     encoding: str = Field(default="utf-8", description="Кодировка файла")
-    has_header: bool = Field(default=True, description="Есть ли заголовки в файле")
-    skip_rows: int = Field(default=0, description="Количество строк для пропуска")
+    has_header: bool = Field(default=True, description="Есть ли заголовок в файле")
+    skip_rows: int = Field(default=0, ge=0, description="Пропустить N строк сверху")
+    max_rows: Optional[int] = Field(default=None, ge=1, description="Максимум строк для чтения")
 
-    # Фильтрация колонок
-    columns: Optional[List[str]] = Field(None, description="Список колонок для извлечения")
-    exclude_columns: Optional[List[str]] = Field(None, description="Список колонок для исключения")
+    # === ОБРАБОТКА ДАННЫХ ===
+    null_values: List[str] = Field(
+        default_factory=lambda: ["", "NULL", "null", "None", "N/A", "n/a", "#N/A"],
+        description="Значения, считающиеся пустыми",
+    )
 
-    # Параметры типов данных
+    # === ТИПЫ ДАННЫХ ===
     infer_schema: bool = Field(default=True, description="Автоматически определять типы")
-    dtypes: Optional[Dict[str, str]] = Field(None, description="Явное указание типов колонок")
+    column_types: Optional[Dict[str, str]] = Field(
+        default=None, description="Явное указание типов колонок"
+    )
 
-    # Потоковый режим
-    streaming: bool = Field(default=False, description="Использовать потоковое чтение")
-    chunk_size: Optional[int] = Field(None, description="Размер chunk для потокового чтения")
+    # === ФОРМАТ ВЫВОДА ===
+    output_format: Literal["pandas", "polars", "dict", "list"] = Field(
+        default="pandas", description="Формат выходных данных"
+    )
 
-    @field_validator('file_path')
+    # === ФИЛЬТРАЦИЯ И ВЫБОРКА ===
+    select_columns: Optional[List[str]] = Field(
+        default=None, description="Выбрать только указанные колонки"
+    )
+    rename_columns: Optional[Dict[str, str]] = Field(
+        default=None, description="Переименовать колонки"
+    )
+    filter_condition: Optional[str] = Field(
+        default=None, description="Условие фильтрации (pandas query синтаксис)"
+    )
+
+    # === ВАЛИДАЦИЯ ===
+    required_columns: List[str] = Field(default_factory=list, description="Обязательные колонки")
+    min_records: Optional[int] = Field(
+        default=None, ge=0, description="Минимальное количество записей"
+    )
+    max_records: Optional[int] = Field(
+        default=None, ge=1, description="Максимальное количество записей"
+    )
+
+    # === ПРОИЗВОДИТЕЛЬНОСТЬ ===
+    chunk_size: Optional[int] = Field(
+        default=None, ge=1, description="Размер чанка для больших файлов"
+    )
+    use_async: bool = Field(default=False, description="Использовать асинхронное чтение")
+    memory_limit: Optional[str] = Field(
+        default=None, description="Лимит памяти (например: '1GB', '500MB')"
+    )
+
+    # === ОБРАБОТКА ОШИБОК ===
+    skip_bad_lines: bool = Field(default=False, description="Пропускать некорректные строки")
+    error_tolerance: float = Field(
+        default=0.0, ge=0.0, le=1.0, description="Допустимая доля ошибок (0.0-1.0)"
+    )
+
+    @field_validator("file_path")
     @classmethod
-    def validate_file_path(cls, v: str) -> str:
-        if not v:
-            raise ValueError("file_path не может быть пустым")
-
-        # Проверяем URL или локальный путь
-        parsed = urlparse(v)
-        if parsed.scheme in ['http', 'https', 'ftp', 's3']:
-            return v  # URL валиден
-
-        # Для локальных путей проверяем существование
+    def validate_file_path(cls, v: Union[str, Path]) -> Path:
+        """Валидация пути к файлу"""
         path = Path(v)
         if not path.exists():
-            raise ValueError(f"Файл не найден: {v}")
+            raise ValueError(f"Файл не найден: {path}")
         if not path.is_file():
-            raise ValueError(f"Путь не является файлом: {v}")
+            raise ValueError(f"Путь не является файлом: {path}")
+        if path.suffix.lower() not in [".csv", ".tsv", ".txt"]:
+            raise ValueError(f"Неподдерживаемый формат файла: {path.suffix}")
+        return path
 
-        return v
-
-    @field_validator('chunk_size')
+    @field_validator("column_types")
     @classmethod
-    def validate_chunk_size(cls, v: Optional[int]) -> Optional[int]:
-        if v is not None and v <= 0:
-            raise ValueError("chunk_size должен быть положительным числом")
+    def validate_column_types(cls, v: Optional[Dict[str, str]]) -> Optional[Dict[str, str]]:
+        """Валидация типов колонок"""
+        if v is None:
+            return v
+
+        valid_types = {
+            "int",
+            "int64",
+            "int32",
+            "integer",
+            "float",
+            "float64",
+            "float32",
+            "double",
+            "str",
+            "string",
+            "object",
+            "bool",
+            "boolean",
+            "datetime",
+            "date",
+            "timestamp",
+        }
+
+        for col, dtype in v.items():
+            if dtype not in valid_types:
+                raise ValueError(f"Неподдерживаемый тип '{dtype}' для колонки '{col}'")
+
         return v
 
+    @model_validator(mode="after")
+    def validate_config(self) -> "CSVExtractorConfig":
+        """Дополнительная валидация конфигурации"""
+        # Проверка совместимости с polars
+        if self.output_format == "polars":
+            if not POLARS_AVAILABLE:
+                raise ValueError("Polars не установлен. Установите: pip install polars")
+            if self.chunk_size is not None:
+                raise ValueError("Polars не поддерживает chunk_size")
+            if self.use_async:
+                raise ValueError("Polars не поддерживает асинхронное чтение")
 
-class CSVExtractor(StreamingExtractor):
+        # Проверка асинхронности
+        if self.use_async and not ASYNC_AVAILABLE:
+            raise ValueError("Для асинхронного чтения установите: pip install aiofiles aiocsv")
+
+        # Проверка лимитов
+        if self.min_records is not None and self.max_records is not None:
+            if self.min_records > self.max_records:
+                raise ValueError("min_records не может быть больше max_records")
+
+        return self
+
+
+@register_component("csv-extractor")
+class CSVExtractor(BaseComponent):
     """
-    Экстрактор для CSV файлов
+    Полноценный CSV экстрактор с расширенными возможностями
 
-    Поддерживает:
-    - Локальные файлы и URL
-    - Различные форматы CSV
-    - Потоковое чтение больших файлов
-    - Фильтрацию колонок
-    - Автоматическое определение типов
+    Возможности:
+    - Различные форматы вывода (pandas, polars, dict, list)
+    - Асинхронное чтение для больших файлов
+    - Chunked processing для экономии памяти
+    - Фильтрация и преобразование данных
+    - Валидация схемы и данных
+    - Обработка ошибок и некорректных строк
+    - Поддержка различных кодировок и форматов
     """
 
     def get_config_model(self):
         return CSVExtractorConfig
 
-    def extract_data(self, context: ExecutionContext) -> Any:
-        """Синхронное извлечение CSV данных"""
-        config: CSVExtractorConfig = self.config
+    def get_component_type(self) -> ComponentType:
+        return ComponentType.EXTRACTOR
 
-        if config.streaming:
-            # Потоковое чтение через async
-            return asyncio.run(self.extract_data_async(context))
-        else:
-            # Обычное чтение в память
-            return self._read_csv_sync(config)
+    def execute(self, context: ExecutionContext) -> ExecutionResult:
+        """Основной метод выполнения"""
+        try:
+            self.logger.info(f"Начинаем извлечение из CSV: {self.config.file_path}")
 
-    async def extract_data_async(self, context: ExecutionContext) -> Any:
-        """Асинхронное извлечение CSV данных"""
-        config: CSVExtractorConfig = self.config
+            # Выбираем метод чтения в зависимости от конфигурации
+            if self.config.use_async:
+                data = self._execute_async()
+            elif self.config.output_format == "polars":
+                data = self._extract_with_polars()
+            else:
+                data = self._extract_with_pandas()
 
-        if config.streaming:
-            # Потоковое чтение по chunks
-            all_data = []
-            async for batch in self.extract_batches(context):
-                all_data.extend(batch)
-            return all_data
-        else:
-            # Асинхронное чтение всего файла
-            return await self._read_csv_async(config)
+            # Постобработка данных
+            data = self._post_process_data(data)
 
-    async def extract_batches(self, context: ExecutionContext) -> AsyncGenerator[List[Dict], None]:
-        """Генератор batch'ей для потокового чтения"""
-        config: CSVExtractorConfig = self.config
+            # Валидация результата
+            self._validate_result(data)
 
-        if self._is_url(config.file_path):
-            # Для URL используем синхронное чтение с pandas
-            df_chunks = pd.read_csv(
-                config.file_path,
-                delimiter=config.delimiter,
-                encoding=config.encoding,
-                header=0 if config.has_header else None,
-                skiprows=config.skip_rows,
-                chunksize=config.chunk_size or config.batch_size,
-                dtype=config.dtypes
+            # Подсчет записей
+            record_count = self._count_records(data)
+
+            self.logger.info(f"Успешно извлечено {record_count} записей")
+
+            return ExecutionResult(
+                status=ExecutionStatus.SUCCESS,
+                data=data,
+                processed_records=record_count,
+                metadata=self._build_metadata(data),
             )
 
-            for chunk in df_chunks:
-                processed_chunk = self._process_dataframe(chunk, config)
-                yield processed_chunk.to_dict('records')
-        else:
-            # Для локальных файлов используем aiofiles
-            async with aiofiles.open(config.file_path, 'r', encoding=config.encoding) as file:
+        except Exception as e:
+            self.logger.error(f"Ошибка при извлечении данных: {e}")
+            return ExecutionResult(
+                status=ExecutionStatus.FAILED,
+                error_message=str(e),
+                metadata={"file_path": str(self.config.file_path)},
+            )
+
+    def _execute_async(self) -> Any:
+        """Выполнение асинхронного извлечения"""
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+        return loop.run_until_complete(self._extract_async())
+
+    async def _extract_async(self) -> List[Dict[str, Any]]:
+        """Асинхронное извлечение данных"""
+        self.logger.info("Начинаем асинхронное извлечение")
+
+        rows = []
+        error_count = 0
+
+        async with aiofiles.open(
+            self.config.file_path, mode="r", encoding=self.config.encoding
+        ) as file:
+            reader = aiocsv.AsyncDictReader(file, delimiter=self.config.delimiter)
+
+            row_count = 0
+            async for row in reader:
                 # Пропускаем строки если нужно
-                for _ in range(config.skip_rows):
-                    await file.readline()
+                if row_count < self.config.skip_rows:
+                    row_count += 1
+                    continue
 
-                # Читаем заголовки
-                headers = None
-                if config.has_header:
-                    header_line = await file.readline()
-                    headers = [h.strip() for h in header_line.strip().split(config.delimiter)]
+                # Ограничиваем количество строк
+                if self.config.max_rows and len(rows) >= self.config.max_rows:
+                    break
 
-                # Читаем данные по batch'ам
-                batch = []
-                batch_size = config.chunk_size or config.batch_size
+                try:
+                    # Обрабатываем null значения
+                    processed_row = self._process_row(row)
+                    rows.append(processed_row)
 
-                async for line in file:
-                    if line.strip():
-                        values = [v.strip() for v in line.strip().split(config.delimiter)]
-
-                        if headers:
-                            row = dict(zip(headers, values))
-                        else:
-                            row = {f"column_{i}": v for i, v in enumerate(values)}
-
-                        batch.append(row)
-
-                        if len(batch) >= batch_size:
-                            yield self._process_batch(batch, config)
-                            batch = []
-
-                # Обрабатываем последний batch
-                if batch:
-                    yield self._process_batch(batch, config)
-
-    def _read_csv_sync(self, config: CSVExtractorConfig) -> pd.DataFrame:
-        """Синхронное чтение CSV файла"""
-        self.logger.info(f"Чтение CSV файла: {config.file_path}")
-
-        # Используем pandas для чтения
-        df = pd.read_csv(
-            config.file_path,
-            delimiter=config.delimiter,
-            encoding=config.encoding,
-            header=0 if config.has_header else None,
-            skiprows=config.skip_rows,
-            dtype=config.dtypes
-        )
-
-        return self._process_dataframe(df, config)
-
-    async def _read_csv_async(self, config: CSVExtractorConfig) -> List[Dict]:
-        """Асинхронное чтение CSV файла"""
-        if self._is_url(config.file_path):
-            # Для URL используем синхронный метод
-            return self._read_csv_sync(config)
-
-        self.logger.info(f"Асинхронное чтение CSV файла: {config.file_path}")
-
-        data = []
-        async with aiofiles.open(config.file_path, 'r', encoding=config.encoding) as file:
-            # Пропускаем строки
-            for _ in range(config.skip_rows):
-                await file.readline()
-
-            # Читаем заголовки
-            headers = None
-            if config.has_header:
-                header_line = await file.readline()
-                headers = [h.strip() for h in header_line.strip().split(config.delimiter)]
-
-            # Читаем все данные
-            async for line in file:
-                if line.strip():
-                    values = [v.strip() for v in line.strip().split(config.delimiter)]
-
-                    if headers:
-                        row = dict(zip(headers, values))
+                except Exception as e:
+                    error_count += 1
+                    if self.config.skip_bad_lines:
+                        self.logger.warning(f"Пропускаем некорректную строку {row_count}: {e}")
+                        continue
                     else:
-                        row = {f"column_{i}": v for i, v in enumerate(values)}
+                        raise PipelineDataError(f"Ошибка в строке {row_count}: {e}")
 
-                    data.append(row)
+                row_count += 1
 
-        return self._process_batch(data, config)
+        # Проверяем допустимость ошибок
+        if error_count > 0:
+            error_rate = error_count / max(len(rows) + error_count, 1)
+            if error_rate > self.config.error_tolerance:
+                raise PipelineDataError(
+                    f"Слишком много ошибок: {error_rate:.2%} > {self.config.error_tolerance:.2%}"
+                )
 
-    def _process_dataframe(self, df: pd.DataFrame, config: CSVExtractorConfig) -> pd.DataFrame:
-        """Обработка pandas DataFrame"""
+        return rows
 
-        # Фильтрация колонок
-        if config.columns:
-            available_columns = [col for col in config.columns if col in df.columns]
-            if available_columns:
-                df = df[available_columns]
-            else:
-                self.logger.warning("Ни одна из указанных колонок не найдена")
+    def _extract_with_pandas(self) -> Union[pd.DataFrame, Dict, List]:
+        """Извлечение с использованием pandas"""
+        read_kwargs = self._build_pandas_kwargs()
 
-        if config.exclude_columns:
-            columns_to_keep = [col for col in df.columns if col not in config.exclude_columns]
-            df = df[columns_to_keep]
+        if self.config.chunk_size:
+            # Chunked reading для больших файлов
+            chunks = []
+            try:
+                for chunk in pd.read_csv(chunksize=self.config.chunk_size, **read_kwargs):
+                    processed_chunk = self._process_chunk(chunk)
+                    if len(processed_chunk) > 0:
+                        chunks.append(processed_chunk)
 
-        # Автоматическое определение типов
-        if config.infer_schema:
-            df = df.infer_objects()
+                    self.logger.debug(f"Обработан chunk: {len(processed_chunk)} записей")
+
+                if chunks:
+                    df = pd.concat(chunks, ignore_index=True)
+                else:
+                    df = pd.DataFrame()
+
+            except Exception as e:
+                raise PipelineExecutionError(f"Ошибка chunked чтения: {e}")
+        else:
+            # Обычное чтение
+            df = pd.read_csv(**read_kwargs)
+            df = self._process_chunk(df)
+
+        # Конвертация в нужный формат
+        return self._convert_output_format(df)
+
+    def _extract_with_polars(self) -> pl.DataFrame:
+        """Извлечение с использованием polars"""
+        read_kwargs = {
+            "source": self.config.file_path,
+            "separator": self.config.delimiter,
+            "encoding": self.config.encoding,
+            "has_header": self.config.has_header,
+            "skip_rows": self.config.skip_rows,
+            "n_rows": self.config.max_rows,
+            "null_values": self.config.null_values,
+            "infer_schema_length": 1000 if self.config.infer_schema else 0,
+        }
+
+        try:
+            df = pl.read_csv(**read_kwargs)
+
+            # Применяем фильтры и преобразования
+            df = self._process_polars_dataframe(df)
+
+            return df
+
+        except Exception as e:
+            raise PipelineExecutionError(f"Ошибка Polars чтения: {e}")
+
+    def _build_pandas_kwargs(self) -> Dict[str, Any]:
+        """Построение аргументов для pandas.read_csv"""
+        kwargs = {
+            "filepath_or_buffer": self.config.file_path,
+            "sep": self.config.delimiter,
+            "encoding": self.config.encoding,
+            "header": 0 if self.config.has_header else None,
+            "skiprows": self.config.skip_rows,
+            "nrows": self.config.max_rows,
+            "na_values": self.config.null_values,
+            "keep_default_na": True,
+            "on_bad_lines": "skip" if self.config.skip_bad_lines else "error",
+        }
+
+        # Колонки для чтения
+        if self.config.select_columns:
+            kwargs["usecols"] = self.config.select_columns
+
+        # Типы данных
+        if not self.config.infer_schema:
+            kwargs["dtype"] = str
+        elif self.config.column_types:
+            # Конвертируем типы в pandas формат
+            pandas_types = {}
+            for col, dtype in self.config.column_types.items():
+                pandas_types[col] = self._convert_to_pandas_dtype(dtype)
+            kwargs["dtype"] = pandas_types
+
+        return kwargs
+
+    def _process_chunk(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Обработка chunk данных"""
+        original_size = len(df)
+
+        # Переименование колонок
+        if self.config.rename_columns:
+            df = df.rename(columns=self.config.rename_columns)
+
+        # Применение типов данных
+        if self.config.column_types:
+            df = self._apply_column_types(df)
+
+        # Фильтрация
+        if self.config.filter_condition:
+            try:
+                df = df.query(self.config.filter_condition)
+                self.logger.debug(f"Фильтрация: {original_size} -> {len(df)} записей")
+            except Exception as e:
+                if self.config.skip_bad_lines:
+                    self.logger.warning(f"Ошибка фильтрации, пропускаем: {e}")
+                else:
+                    raise PipelineExecutionError(f"Ошибка в условии фильтрации: {e}")
 
         return df
 
-    def _process_batch(self, batch: List[Dict], config: CSVExtractorConfig) -> List[Dict]:
-        """Обработка batch данных"""
-        if not batch:
-            return batch
+    def _process_polars_dataframe(self, df: pl.DataFrame) -> pl.DataFrame:
+        """Обработка Polars DataFrame"""
+        # Переименование колонок
+        if self.config.rename_columns:
+            for old_name, new_name in self.config.rename_columns.items():
+                if old_name in df.columns:
+                    df = df.rename({old_name: new_name})
 
-        # Фильтрация колонок
-        if config.columns:
-            batch = [
-                {k: v for k, v in row.items() if k in config.columns}
-                for row in batch
-            ]
+        # Выбор колонок
+        if self.config.select_columns:
+            available_columns = [col for col in self.config.select_columns if col in df.columns]
+            if available_columns:
+                df = df.select(available_columns)
 
-        if config.exclude_columns:
-            batch = [
-                {k: v for k, v in row.items() if k not in config.exclude_columns}
-                for row in batch
-            ]
+        # Примечание: фильтрация в Polars требует специального синтаксиса
+        # Для простоты пропускаем в этой версии
 
-        # Простое приведение типов
-        if config.infer_schema:
-            batch = self._infer_types_batch(batch)
+        return df
 
-        return batch
+    def _process_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        """Обработка одной строки для асинхронного чтения"""
+        processed_row = {}
 
-    def _infer_types_batch(self, batch: List[Dict]) -> List[Dict]:
-        """Простое определение типов для batch"""
-        if not batch:
-            return batch
+        for key, value in row.items():
+            # Обработка null значений
+            if value in self.config.null_values:
+                processed_row[key] = None
+            else:
+                processed_row[key] = value
 
-        # Для каждой колонки пытаемся определить тип
-        result = []
-        for row in batch:
-            new_row = {}
-            for key, value in row.items():
-                if value and isinstance(value, str):
-                    # Пытаемся преобразовать в число
-                    try:
-                        if '.' in value:
-                            new_row[key] = float(value)
-                        else:
-                            new_row[key] = int(value)
-                    except ValueError:
-                        # Пытаемся преобразовать в bool
-                        if value.lower() in ['true', 'false']:
-                            new_row[key] = value.lower() == 'true'
-                        else:
-                            new_row[key] = value
-                else:
-                    new_row[key] = value
-            result.append(new_row)
+        # Переименование колонок
+        if self.config.rename_columns:
+            final_row = {}
+            for key, value in processed_row.items():
+                new_key = self.config.rename_columns.get(key, key)
+                final_row[new_key] = value
+            processed_row = final_row
 
-        return result
+        # Выбор колонок
+        if self.config.select_columns:
+            filtered_row = {}
+            for col in self.config.select_columns:
+                if col in processed_row:
+                    filtered_row[col] = processed_row[col]
+            processed_row = filtered_row
 
-    def _is_url(self, path: str) -> bool:
-        """Проверка является ли путь URL"""
-        parsed = urlparse(path)
-        return parsed.scheme in ['http', 'https', 'ftp', 's3']
+        return processed_row
 
-    def setup(self) -> None:
-        """Инициализация"""
-        config: CSVExtractorConfig = self.config
-        self.logger.info(f"Инициализация CSV экстрактора для: {config.file_path}")
+    def _post_process_data(self, data: Any) -> Any:
+        """Постобработка данных"""
+        if isinstance(data, pd.DataFrame):
+            # Проверка лимитов записей
+            if self.config.max_records and len(data) > self.config.max_records:
+                data = data.head(self.config.max_records)
+                self.logger.info(f"Ограничено до {self.config.max_records} записей")
 
-    def teardown(self) -> None:
-        """Очистка ресурсов"""
-        self.logger.debug("Очистка ресурсов CSV экстрактора")
+        return data
+
+    def _apply_column_types(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Применение типов данных к колонкам"""
+        for col, dtype in self.config.column_types.items():
+            if col in df.columns:
+                try:
+                    pandas_dtype = self._convert_to_pandas_dtype(dtype)
+                    if dtype in ["datetime", "timestamp"]:
+                        df[col] = pd.to_datetime(df[col], errors="coerce")
+                    elif dtype == "date":
+                        df[col] = pd.to_datetime(df[col], errors="coerce").dt.date
+                    else:
+                        df[col] = df[col].astype(pandas_dtype)
+
+                except Exception as e:
+                    self.logger.warning(
+                        f"Не удалось привести колонку '{col}' к типу '{dtype}': {e}"
+                    )
+
+        return df
+
+    def _convert_to_pandas_dtype(self, dtype: str) -> str:
+        """Конвертация типа в pandas формат"""
+        mapping = {
+            "int": "Int64",
+            "integer": "Int64",
+            "int32": "Int32",
+            "int64": "Int64",
+            "float": "float64",
+            "float32": "float32",
+            "float64": "float64",
+            "double": "float64",
+            "str": "string",
+            "string": "string",
+            "object": "object",
+            "bool": "boolean",
+            "boolean": "boolean",
+        }
+        return mapping.get(dtype, dtype)
+
+    def _convert_output_format(self, df: pd.DataFrame) -> Union[pd.DataFrame, Dict, List]:
+        """Конвертация в нужный формат вывода"""
+        if self.config.output_format == "pandas":
+            return df
+        elif self.config.output_format == "dict":
+            return df.to_dict("records")
+        elif self.config.output_format == "list":
+            return df.values.tolist()
+        else:
+            raise PipelineConfigError(f"Неподдерживаемый формат: {self.config.output_format}")
+
+    def _validate_result(self, data: Any) -> None:
+        """Валидация результата"""
+        if data is None:
+            raise PipelineDataError("Результат извлечения пуст")
+
+        # Подсчет записей
+        record_count = self._count_records(data)
+
+        # Проверка минимального количества записей
+        if self.config.min_records is not None:
+            if record_count < self.config.min_records:
+                raise PipelineDataError(
+                    f"Недостаточно записей: {record_count} < {self.config.min_records}"
+                )
+
+        # Проверка максимального количества записей
+        if self.config.max_records is not None:
+            if record_count > self.config.max_records:
+                self.logger.warning(
+                    f"Превышен лимит записей: {record_count} > {self.config.max_records}"
+                )
+
+        # Проверка обязательных колонок
+        if self.config.required_columns:
+            columns = self._get_columns(data)
+            missing_columns = set(self.config.required_columns) - set(columns)
+            if missing_columns:
+                raise PipelineDataError(f"Отсутствуют обязательные колонки: {missing_columns}")
+
+    def _get_columns(self, data: Any) -> List[str]:
+        """Получение списка колонок"""
+        if isinstance(data, pd.DataFrame):
+            return data.columns.tolist()
+        elif isinstance(data, pl.DataFrame):
+            return data.columns
+        elif isinstance(data, list) and data:
+            if isinstance(data[0], dict):
+                return list(data[0].keys())
+            else:
+                return [f"col_{i}" for i in range(len(data[0]))]
+        return []
+
+    def _count_records(self, data: Any) -> int:
+        """Подсчет количества записей"""
+        if isinstance(data, (pd.DataFrame, pl.DataFrame)):
+            return len(data)
+        elif isinstance(data, list):
+            return len(data)
+        return 0
+
+    def _build_metadata(self, data: Any) -> Dict[str, Any]:
+        """Построение метаданных результата"""
+        metadata = {
+            "file_path": str(self.config.file_path),
+            "file_size": self.config.file_path.stat().st_size,
+            "output_format": self.config.output_format,
+            "columns": self._get_columns(data),
+            "encoding": self.config.encoding,
+            "delimiter": self.config.delimiter,
+        }
+
+        # Добавляем информацию о chunk processing
+        if self.config.chunk_size:
+            metadata["chunk_size"] = self.config.chunk_size
+            metadata["chunked_processing"] = True
+
+        # Добавляем информацию об асинхронности
+        if self.config.use_async:
+            metadata["async_processing"] = True
+
+        return metadata
+
+    def validate_dependencies(self, available_stages: List[str]) -> List[str]:
+        """CSV экстрактор не имеет зависимостей"""
+        return []
+
+    def health_check(self) -> bool:
+        """Проверка состояния экстрактора"""
+        try:
+            # Проверяем доступность файла
+            if not self.config.file_path.exists():
+                return False
+
+            # Проверяем права на чтение
+            if not self.config.file_path.is_file():
+                return False
+
+            # Проверяем что файл не пустой
+            if self.config.file_path.stat().st_size == 0:
+                return False
+
+            return True
+        except Exception:
+            return False
+
+
+# === РЕГИСТРАЦИЯ АЛИАСОВ ===
+
+
+@register_component("file-csv")
+class CSVExtractorAlias(CSVExtractor):
+    """Алиас для csv-extractor"""
+
+    pass
+
+
+@register_component("tsv-extractor")
+class TSVExtractor(CSVExtractor):
+    """Специализированный TSV экстрактор"""
+
+    def get_config_model(self):
+        class TSVExtractorConfig(CSVExtractorConfig):
+            type: str = Field(default="tsv-extractor", frozen=True)
+            delimiter: str = Field(default="\t", frozen=True)
+
+        return TSVExtractorConfig

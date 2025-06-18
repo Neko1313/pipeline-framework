@@ -15,12 +15,10 @@ __all__ = [
     # Версия
     "__version__",
     "__author__",
-
     # Базовые классы
     "BaseTransformer",
     "DataTransformer",
     "TransformerConfig",
-
     # Data transformers
     "DataTransformerComponent",
     "DataTransformerConfig",

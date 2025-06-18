@@ -1,6 +1,7 @@
 """
 HTTP API Extractor - извлечение данных из HTTP API
 """
+
 from typing import Any, Dict, List, Optional, AsyncGenerator, Union
 import httpx
 import asyncio
@@ -14,6 +15,7 @@ from pydantic import Field, field_validator
 
 class HTTPExtractorConfig(ExtractorConfig):
     """Конфигурация HTTP экстрактора"""
+
     type: str = Field(default="http-extractor", const=True)
 
     # URL и аутентификация
@@ -40,7 +42,9 @@ class HTTPExtractorConfig(ExtractorConfig):
 
     # Пагинация
     pagination_enabled: bool = Field(default=False, description="Включить поддержку пагинации")
-    pagination_type: str = Field(default="offset", description="Тип пагинации: offset, cursor, page")
+    pagination_type: str = Field(
+        default="offset", description="Тип пагинации: offset, cursor, page"
+    )
     pagination_param: str = Field(default="offset", description="Параметр для пагинации")
     pagination_size_param: str = Field(default="limit", description="Параметр размера страницы")
     pagination_size: int = Field(default=100, description="Размер страницы")
@@ -49,7 +53,7 @@ class HTTPExtractorConfig(ExtractorConfig):
     response_data_path: Optional[str] = Field(None, description="JSONPath к данным в ответе")
     response_format: str = Field(default="json", description="Формат ответа: json, xml, csv, text")
 
-    @field_validator('base_url')
+    @field_validator("base_url")
     @classmethod
     def validate_base_url(cls, v: str) -> str:
         if not v:
@@ -59,9 +63,9 @@ class HTTPExtractorConfig(ExtractorConfig):
         if not parsed.scheme or not parsed.netloc:
             raise ValueError("base_url должен быть валидным URL")
 
-        return v.rstrip('/')
+        return v.rstrip("/")
 
-    @field_validator('method')
+    @field_validator("method")
     @classmethod
     def validate_method(cls, v: str) -> str:
         allowed_methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
@@ -123,7 +127,9 @@ class HTTPExtractor(StreamingExtractor):
             else:
                 raise ValueError(f"Неподдерживаемый тип пагинации: {config.pagination_type}")
 
-    async def _paginate_offset(self, client: httpx.AsyncClient, config: HTTPExtractorConfig) -> AsyncGenerator[List[Dict], None]:
+    async def _paginate_offset(
+        self, client: httpx.AsyncClient, config: HTTPExtractorConfig
+    ) -> AsyncGenerator[List[Dict], None]:
         """Пагинация через offset/limit"""
         offset = 0
 
@@ -152,7 +158,9 @@ class HTTPExtractor(StreamingExtractor):
             if config.max_records and offset >= config.max_records:
                 break
 
-    async def _paginate_cursor(self, client: httpx.AsyncClient, config: HTTPExtractorConfig) -> AsyncGenerator[List[Dict], None]:
+    async def _paginate_cursor(
+        self, client: httpx.AsyncClient, config: HTTPExtractorConfig
+    ) -> AsyncGenerator[List[Dict], None]:
         """Пагинация через cursor"""
         cursor = None
 
@@ -177,7 +185,9 @@ class HTTPExtractor(StreamingExtractor):
             if not cursor:
                 break
 
-    async def _paginate_page(self, client: httpx.AsyncClient, config: HTTPExtractorConfig) -> AsyncGenerator[List[Dict], None]:
+    async def _paginate_page(
+        self, client: httpx.AsyncClient, config: HTTPExtractorConfig
+    ) -> AsyncGenerator[List[Dict], None]:
         """Пагинация через номер страницы"""
         page = 1
 
@@ -202,11 +212,15 @@ class HTTPExtractor(StreamingExtractor):
 
             page += 1
 
-    async def _make_request(self, client: httpx.AsyncClient, config: HTTPExtractorConfig,
-                            custom_params: Optional[Dict] = None) -> Any:
+    async def _make_request(
+        self,
+        client: httpx.AsyncClient,
+        config: HTTPExtractorConfig,
+        custom_params: Optional[Dict] = None,
+    ) -> Any:
         """Выполнение HTTP запроса"""
         # Строим URL
-        url = urljoin(config.base_url + '/', config.endpoint.lstrip('/'))
+        url = urljoin(config.base_url + "/", config.endpoint.lstrip("/"))
 
         # Подготавливаем параметры
         params = custom_params or config.params
@@ -233,7 +247,7 @@ class HTTPExtractor(StreamingExtractor):
             json=json_data,
             data=request_data,
             timeout=config.timeout,
-            follow_redirects=config.follow_redirects
+            follow_redirects=config.follow_redirects,
         )
 
         # Проверяем статус ответа
@@ -300,7 +314,7 @@ class HTTPExtractor(StreamingExtractor):
     def _extract_json_path(self, data: Any, path: str) -> Any:
         """Простое извлечение данных по JSONPath"""
         # Простая реализация для основных случаев
-        parts = path.split('.')
+        parts = path.split(".")
         current = data
 
         for part in parts:
@@ -344,7 +358,7 @@ class HTTPExtractor(StreamingExtractor):
                 if attempt == config.retry_attempts:
                     break
 
-                delay = config.retry_delay * (config.retry_exponential_base ** attempt)
+                delay = config.retry_delay * (config.retry_exponential_base**attempt)
                 self.logger.warning(
                     f"HTTP запрос неудачен, попытка {attempt + 1}: {e}. "
                     f"Повтор через {delay:.2f} сек"
@@ -362,11 +376,7 @@ class HTTPExtractor(StreamingExtractor):
         if config.auth_type == "basic" and config.auth_username and config.auth_password:
             auth = httpx.BasicAuth(config.auth_username, config.auth_password)
 
-        return httpx.AsyncClient(
-            verify=config.verify_ssl,
-            auth=auth,
-            timeout=config.timeout
-        )
+        return httpx.AsyncClient(verify=config.verify_ssl, auth=auth, timeout=config.timeout)
 
     def setup(self) -> None:
         """Инициализация"""
