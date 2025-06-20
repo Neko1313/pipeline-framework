@@ -12,6 +12,7 @@ members = [
     "packages/components/extractors/stages",
     "packages/components/extractors/extractor_sql",
     "packages/components/loaders/loaders_sql",
+    "packages/components/transformers/transformer-polars",
 ]
 
 [dependency-groups]

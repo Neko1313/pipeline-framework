@@ -4,130 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="d90b37a7-db67-4f24-90c0-c200d35a3ed1" name="Список изменений" comment="fix">
-      <change afterPath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/cli/__init__.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/cli/main.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/components/__init__.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/components/base.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/config/__init__.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/config/models.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/config/yaml_loader.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/observability/__init__.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/observability/logging.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/observability/metrics.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/pipeline/__init__.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/pipeline/executor.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/temporal/__init__.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/temporal/activities.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/temporal/client.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/temporal/workflows.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/pipeline-framework.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/pipeline-framework.iml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/vcs.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/Makefile" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/examples/complete_pipline.yml" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/examples/full_csv_extractor_demo.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/examples/simple_pipeline.yml" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/examples/simple_transformer.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/examples/test_components.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/extractors/README.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/extractors/pyproject.toml" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/extractors/src/pipeline_extractors/__init__.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/extractors/src/pipeline_extractors/api/__init__.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/extractors/src/pipeline_extractors/api/http_extractor.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/extractors/src/pipeline_extractors/base.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/extractors/src/pipeline_extractors/database/__init__.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/extractors/src/pipeline_extractors/database/component.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/extractors/src/pipeline_extractors/database/config.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/extractors/src/pipeline_extractors/database/connectors/mongodb.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/extractors/src/pipeline_extractors/database/connectors/mysql.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/extractors/src/pipeline_extractors/database/connectors/postgresql.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/extractors/src/pipeline_extractors/file/__init__.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/extractors/src/pipeline_extractors/file/csv_extractor.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/extractors/tests/__init__.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/extractors/tests/test_csv_extractor.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/loaders/pyproject.toml" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/loaders/src/pipeline_loaders/__init__.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/loaders/src/pipeline_loaders/load_cloud/__init__.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/loaders/src/pipeline_loaders/load_cloud/component.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/loaders/src/pipeline_loaders/load_cloud/config.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/loaders/src/pipeline_loaders/load_cloud/writers/azure_writer.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/loaders/src/pipeline_loaders/load_cloud/writers/gcs_writer.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/loaders/src/pipeline_loaders/load_cloud/writers/s3_writer.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/loaders/src/pipeline_loaders/load_database/__init__.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/loaders/src/pipeline_loaders/load_database/component.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/loaders/src/pipeline_loaders/load_database/config.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/loaders/src/pipeline_loaders/load_database/writers/batch_writer.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/loaders/src/pipeline_loaders/load_database/writers/mysql_writer.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/loaders/src/pipeline_loaders/load_database/writers/postgresql_writer.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/loaders/src/pipeline_loaders/load_file/__init__.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/loaders/src/pipeline_loaders/load_file/component.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/loaders/src/pipeline_loaders/load_file/config.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/loaders/src/pipeline_loaders/load_file/writers/csv_writer.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/loaders/src/pipeline_loaders/load_file/writers/json_writer.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/loaders/src/pipeline_loaders/load_file/writers/parquet_writer.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/transformers/README.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/transformers/pyproject.toml" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/transformers/src/pipeline_transformers/__init__.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/transformers/src/pipeline_transformers/base.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/transformers/src/pipeline_transformers/data/data_transformer.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/transformers/src/pipeline_transformers/transform_aggregation/__init__.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/transformers/src/pipeline_transformers/transform_aggregation/component.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/transformers/src/pipeline_transformers/transform_aggregation/config.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/transformers/src/pipeline_transformers/transform_ml/__init__.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/transformers/src/pipeline_transformers/transform_ml/component.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/transformers/src/pipeline_transformers/transform_ml/config.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/transformers/src/pipeline_transformers/transform_ml/processors/feature_engineering.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/transformers/src/pipeline_transformers/transform_ml/processors/llm_processor.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/transformers/src/pipeline_transformers/transform_ml/processors/model_inference.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/transformers/tests/test_data_transformer.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/validators/pyproject.toml" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/validators/src/pipeline_validators/__init__.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/validators/src/pipeline_validators/validate_business/__init__.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/validators/src/pipeline_validators/validate_business/component.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/validators/src/pipeline_validators/validate_business/config.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/validators/src/pipeline_validators/validate_data/__init__.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/validators/src/pipeline_validators/validate_data/component.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/validators/src/pipeline_validators/validate_data/config.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/validators/src/pipeline_validators/validate_data/validators/custom_validator.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/validators/src/pipeline_validators/validate_data/validators/patito_validator.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/validators/src/pipeline_validators/validate_data/validators/schema_validator.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/validators/src/pipeline_validators/validate_quality/__init__.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/validators/src/pipeline_validators/validate_quality/component.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/validators/src/pipeline_validators/validate_quality/config.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/pipeline-core/.pre-commit-config.yaml" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/pipeline-core/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/packages/pipeline-core/README.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/pipeline-core/coverage.xml" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/pipeline-core/pyproject.toml" beforeDir="false" afterPath="$PROJECT_DIR$/packages/pipeline-core/pyproject.toml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/pipeline-core/pyrightconfig.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/__init__.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/exceptions/__init__.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/exceptions/errors.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/models/__init__.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/models/component.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/models/pipeline.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/parser/__init__.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/parser/yaml_parser.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/registry/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/registry/__init__.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/registry/component_registry.py" beforeDir="false" afterPath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/registry/component_registry.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/utils/__init__.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/utils/logging.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/pipeline-core/tests/test_basic.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/pipeline-core/tests/test_core_functionality.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/pipeline-core/uv.lock" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/pyproject.toml" beforeDir="false" afterPath="$PROJECT_DIR$/pyproject.toml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/schemas/components/load-database.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/schemas/components/load-file.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/schemas/components/transform-data.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/schemas/components/transform-ml.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/schemas/components/validate-data.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/schemas/components/validate-quality.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/schemas/pipeline-schema.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/scripts/quick-start.sh" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/uv.lock" beforeDir="false" afterPath="$PROJECT_DIR$/uv.lock" afterDir="false" />
-    </list>
+    <list default="true" id="d90b37a7-db67-4f24-90c0-c200d35a3ed1" name="Список изменений" comment="fix" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -167,6 +44,7 @@
   "keyToString": {
     "RunOnceActivity.ShowReadmeOnStart": "true",
     "RunOnceActivity.git.unshallow": "true",
+    "SONARLINT_PRECOMMIT_ANALYSIS": "true",
     "dart.analysis.tool.window.visible": "false",
     "git-widget-placeholder": "main",
     "last_opened_file_path": "/home/neko/project/pipeline-framework",
@@ -198,11 +76,24 @@
       <workItem from="1750198547156" duration="2885000" />
       <workItem from="1750204391509" duration="11000" />
       <workItem from="1750225811857" duration="2242000" />
-      <workItem from="1750389532203" duration="4043000" />
+      <workItem from="1750389532203" duration="4434000" />
     </task>
+    <task id="LOCAL-00001" summary="fix">
+      <option name="closed" value="true" />
+      <created>1750393810142</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1750393810142</updated>
+    </task>
+    <option name="localTasksCounter" value="2" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
     <option name="version" value="3" />
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="fix" />
+    <option name="LAST_COMMIT_MESSAGE" value="fix" />
   </component>
 </project>
