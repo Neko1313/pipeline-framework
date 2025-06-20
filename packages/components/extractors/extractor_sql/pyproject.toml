@@ -7,11 +7,203 @@ authors = [
     { name = "Ryibalchenko.NV", email = "Ryibalchenko.NV@dns-shop.ru" }
 ]
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    # Core pipeline framework
+    "pipeline-core",
+
+    # SQLAlchemy and database drivers
+    "sqlalchemy[asyncio]>=2.0.25",
+    "greenlet>=3.0.0",  # Required for SQLAlchemy async
+
+    # Database drivers (async)
+    "asyncpg>=0.29.0",      # PostgreSQL
+    "aiomysql>=0.2.0",      # MySQL
+    "aiosqlite>=0.19.0",    # SQLite
+    "asyncmy>=0.2.9",       # Alternative MySQL driver
+
+    # Oracle and SQL Server support (optional)
+    "oracledb>=2.0.0; extra == 'oracle'",
+    "aioodbc>=0.4.0; extra == 'mssql'",
+
+    # Data processing and validation
+    "pandas>=2.1.0",
+    "polars>=0.20.0",
+    "pyarrow>=14.0.0",     # For efficient data transfer
+
+    # Configuration and utilities
+    "pydantic>=2.5.0",
+    "pydantic-settings>=2.1.0",
+
+    # Async utilities
+    "aiofiles>=23.2.1",
+    "asyncio-throttle>=1.0.2",
+
+    # Monitoring and logging
+    "structlog>=23.2.0",
+    "prometheus-client>=0.19.0",
+
+    # Connection pooling and retry
+    "tenacity>=8.2.3",
+    "aiohttp>=3.9.0",
+]
+
+[project.optional-dependencies]
+# Дополнительные database drivers
+oracle = ["oracledb>=2.0.0", "cx-oracle>=8.3.0"]
+mssql = ["aioodbc>=0.4.0", "pyodbc>=5.0.0"]
+snowflake = ["snowflake-sqlalchemy>=1.5.0", "snowflake-connector-python[pandas]>=3.6.0"]
+bigquery = ["sqlalchemy-bigquery>=1.8.0", "google-cloud-bigquery>=3.13.0"]
+
+# Development dependencies
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.0.0",
+    "pytest-mock>=3.12.0",
+    "pytest-xdist>=3.5.0",
+    "factory-boy>=3.3.0",
+
+    # Testing databases
+    "pytest-postgresql>=5.0.0",
+    "pytest-mysql>=2.3.0",
+    "testcontainers[postgresql,mysql]>=3.7.0",
+
+    # Code quality
+    "ruff>=0.8.0",
+    "black>=23.12.0",
+    "pyright>=1.1.350",
+    "pre-commit>=3.6.0",
+
+    # Performance testing
+    "pytest-benchmark>=4.0.0",
+    "memory-profiler>=0.61.0",
+]
+
+# Documentation
+docs = [
+    "mkdocs>=1.5.0",
+    "mkdocs-material>=9.4.0",
+    "mkdocs-mermaid2-plugin>=1.1.0",
+    "mkdocstrings[python]>=0.24.0",
+]
+
+[project.entry-points."pipeline_framework.extractors"]
+sql = "extractor_sql.components:SQLExtractor"
+postgresql = "extractor_sql.components:PostgreSQLExtractor"
+mysql = "extractor_sql.components:MySQLExtractor"
+sqlite = "extractor_sql.components:SQLiteExtractor"
 
 [project.scripts]
-extractor-sql = "extractor_sql:main"
+extractor-sql = "extractor_sql.cli:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "UP",   # pyupgrade
+    "S",    # bandit
+    "PTH",  # flake8-use-pathlib
+    "SIM",  # flake8-simplify
+    "RUF",  # Ruff-specific rules
+    "ASYNC", # flake8-async
+    "PERF", # perflint
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+    "S101",  # assert used (ok in tests)
+    "S311",  # random used (ok for testing)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "S101",     # assert used
+    "PLR2004",  # magic value used in comparison
+    "S106",     # hardcoded password
+    "S105",     # hardcoded password string
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["extractor_sql", "pipeline_core"]
+force-sort-within-sections = true
+
+[tool.pyright]
+typeCheckingMode = "strict"
+pythonVersion = "3.13"
+include = ["src", "tests"]
+exclude = ["build", "dist", ".venv"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+    "--cov=extractor_sql",
+    "--cov-report=term-missing",
+    "--cov-report=html",
+    "--cov-fail-under=85",
+    "-ra",  # show all test outcomes
+    "--tb=short",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+    "unit: marks tests as unit tests",
+    "database: marks tests that require database",
+    "postgresql: marks tests that require PostgreSQL",
+    "mysql: marks tests that require MySQL",
+]
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["src/extractor_sql"]
+omit = [
+    "*/tests/*",
+    "*/test_*",
+    "*/__pycache__/*",
+    "*/conftest.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if self.debug:",
+    "if settings.DEBUG",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if 0:",
+    "if __name__ == .__main__.:",
+    "class .*\\bProtocol\\):",
+    "@(abc\\.)?abstractmethod",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.12.0",
+]
+test = [
+    "aioresponses>=0.7.8",
+    "factory-boy>=3.3.3",
+    "pytest>=8.4.1",
+    "pytest-asyncio>=1.0.0",
+    "pytest-cov>=6.2.1",
+    "pytest-mock>=3.14.1",
+    "testcontainers[mysql,postgresql]>=4.10.0",
+]

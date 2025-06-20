@@ -4,7 +4,20 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="d90b37a7-db67-4f24-90c0-c200d35a3ed1" name="Список изменений" comment="fix" />
+    <list default="true" id="d90b37a7-db67-4f24-90c0-c200d35a3ed1" name="Список изменений" comment="fix">
+      <change afterPath="$PROJECT_DIR$/packages/components/extractors/extractor_sql/src/extractor_sql/cli.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/packages/components/extractors/extractor_sql/src/extractor_sql/components.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/packages/components/extractors/extractor_sql/src/extractor_sql/exceptions.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/packages/components/extractors/extractor_sql/src/extractor_sql/utils.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/packages/components/extractors/extractor_sql/tests/conftest.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/packages/components/extractors/extractor_sql/tests/test_components.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/packages/components/extractors/extractor_sql/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/packages/components/extractors/extractor_sql/README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/packages/components/extractors/extractor_sql/pyproject.toml" beforeDir="false" afterPath="$PROJECT_DIR$/packages/components/extractors/extractor_sql/pyproject.toml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/packages/components/extractors/extractor_sql/src/extractor_sql/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/packages/components/extractors/extractor_sql/src/extractor_sql/__init__.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/pyproject.toml" beforeDir="false" afterPath="$PROJECT_DIR$/pyproject.toml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/uv.lock" beforeDir="false" afterPath="$PROJECT_DIR$/uv.lock" afterDir="false" />
+    </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -57,6 +70,11 @@
     "vue.rearranger.settings.migration": "true"
   }
 }]]></component>
+  <component name="RecentsManager">
+    <key name="MoveFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$/packages/components/extractors/extractor_sql" />
+    </key>
+  </component>
   <component name="SharedIndexes">
     <attachedChunks>
       <set>
@@ -76,7 +94,7 @@
       <workItem from="1750198547156" duration="2885000" />
       <workItem from="1750204391509" duration="11000" />
       <workItem from="1750225811857" duration="2242000" />
-      <workItem from="1750389532203" duration="4434000" />
+      <workItem from="1750389532203" duration="11156000" />
     </task>
     <task id="LOCAL-00001" summary="fix">
       <option name="closed" value="true" />
@@ -86,7 +104,15 @@
       <option name="project" value="LOCAL" />
       <updated>1750393810142</updated>
     </task>
-    <option name="localTasksCounter" value="2" />
+    <task id="LOCAL-00002" summary="fix">
+      <option name="closed" value="true" />
+      <created>1750394074267</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1750394074267</updated>
+    </task>
+    <option name="localTasksCounter" value="3" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
