@@ -1,0 +1,533 @@
+"""
+Pydantic модели для конфигурации pipeline
+
+Предоставляет:
+- Валидацию конфигурации
+- Type safety
+- JSON Schema generation
+- Environment variables substitution
+- Configuration inheritance
+"""
+
+from typing import Dict, List, Any, Optional, Union, Literal
+from pydantic import BaseModel, Field, validator, root_validator
+from enum import Enum
+from datetime import datetime, timedelta
+import re
+import os
+
+
+class RetryPolicyType(str, Enum):
+    """Типы политик повторных попыток"""
+
+    EXPONENTIAL_BACKOFF = "exponential_backoff"
+    FIXED_INTERVAL = "fixed_interval"
+    LINEAR_BACKOFF = "linear_backoff"
+    IMMEDIATE = "immediate"
+    NONE = "none"
+
+
+class WriteMode(str, Enum):
+    """Режимы записи данных"""
+
+    INSERT = "insert"
+    UPSERT = "upsert"
+    REPLACE = "replace"
+    APPEND = "append"
+    OVERWRITE = "overwrite"
+
+
+class DataFormat(str, Enum):
+    """Форматы данных"""
+
+    JSON = "json"
+    CSV = "csv"
+    PARQUET = "parquet"
+    AVRO = "avro"
+    XML = "xml"
+    EXCEL = "excel"
+
+
+class LogLevel(str, Enum):
+    """Уровни логирования"""
+
+    DEBUG = "DEBUG"
+    INFO = "INFO"
+    WARNING = "WARNING"
+    ERROR = "ERROR"
+    CRITICAL = "CRITICAL"
+
+
+class Environment(str, Enum):
+    """Окружения выполнения"""
+
+    DEVELOPMENT = "development"
+    TESTING = "testing"
+    STAGING = "staging"
+    PRODUCTION = "production"
+
+
+class RetryPolicy(BaseModel):
+    """Политика повторных попыток"""
+
+    maximum_attempts: int = Field(
+        3, ge=1, le=10, description="Максимальное количество попыток"
+    )
+    initial_interval_seconds: float = Field(
+        30.0, ge=0.1, description="Начальный интервал в секундах"
+    )
+    backoff_coefficient: float = Field(
+        2.0, ge=1.0, le=10.0, description="Коэффициент увеличения интервала"
+    )
+    max_interval_seconds: float = Field(
+        300.0, ge=1.0, description="Максимальный интервал в секундах"
+    )
+    policy_type: RetryPolicyType = Field(
+        RetryPolicyType.EXPONENTIAL_BACKOFF, description="Тип политики"
+    )
+
+    @validator("max_interval_seconds")
+    def max_interval_must_be_greater_than_initial(cls, v, values):
+        if (
+            "initial_interval_seconds" in values
+            and v < values["initial_interval_seconds"]
+        ):
+            raise ValueError("max_interval_seconds must be >= initial_interval_seconds")
+        return v
+
+
+class ParallelConfig(BaseModel):
+    """Конфигурация параллельного выполнения"""
+
+    enabled: bool = Field(False, description="Включить параллельное выполнение")
+    max_workers: int = Field(
+        4, ge=1, le=32, description="Максимальное количество worker'ов"
+    )
+    batch_size: int = Field(1000, ge=1, description="Размер batch для обработки")
+    timeout_seconds: Optional[int] = Field(
+        None, ge=1, description="Timeout для каждого worker'а"
+    )
+
+
+class ResourceLimits(BaseModel):
+    """Ограничения ресурсов"""
+
+    memory_limit_mb: Optional[int] = Field(None, ge=64, description="Лимит памяти в MB")
+    cpu_limit_cores: Optional[float] = Field(None, ge=0.1, description="Лимит CPU ядер")
+    disk_limit_mb: Optional[int] = Field(
+        None, ge=100, description="Лимит дискового пространства в MB"
+    )
+    network_limit_mbps: Optional[int] = Field(
+        None, ge=1, description="Лимит сети в Mbps"
+    )
+
+
+class StageConfig(BaseModel):
+    """Конфигурация отдельного этапа pipeline"""
+
+    name: str = Field(..., min_length=1, description="Уникальное имя этапа")
+    component: str = Field(
+        ...,
+        regex=r"^(extractor|transformer|loader|validator|stage)/[\w-]+$",
+        description="Компонент в формате 'type/name'",
+    )
+    config: Dict[str, Any] = Field(
+        default_factory=dict, description="Конфигурация компонента"
+    )
+
+    # Dependencies
+    depends_on: List[str] = Field(
+        default_factory=list, description="Зависимости от других этапов"
+    )
+
+    # Execution settings
+    enabled: bool = Field(True, description="Включен ли этап")
+    retry_policy: RetryPolicy = Field(
+        default_factory=RetryPolicy, description="Политика повторных попыток"
+    )
+    timeout_seconds: int = Field(3600, ge=1, description="Timeout в секундах")
+
+    # Performance settings
+    parallel: Optional[ParallelConfig] = Field(
+        None, description="Настройки параллельного выполнения"
+    )
+    resource_limits: Optional[ResourceLimits] = Field(
+        None, description="Ограничения ресурсов"
+    )
+
+    # Conditional execution
+    condition: Optional[str] = Field(
+        None, description="Условие выполнения (Python expression)"
+    )
+
+    # Output settings
+    cache_result: bool = Field(True, description="Кэшировать результат этапа")
+    checkpoint_enabled: bool = Field(True, description="Включить checkpoint'ы")
+
+    @property
+    def component_type(self) -> str:
+        """Тип компонента"""
+        return self.component.split("/")[0]
+
+    @property
+    def component_name(self) -> str:
+        """Имя компонента"""
+        return self.component.split("/")[1]
+
+    @validator("component")
+    def validate_component_format(cls, v):
+        """Валидация формата компонента"""
+        parts = v.split("/")
+        if len(parts) != 2:
+            raise ValueError("Component must be in format 'type/name'")
+
+        valid_types = {"extractor", "transformer", "loader", "validator", "stage"}
+        if parts[0] not in valid_types:
+            raise ValueError(f"Component type must be one of: {valid_types}")
+
+        return v
+
+
+class QualityCheck(BaseModel):
+    """Конфигурация проверки качества данных"""
+
+    name: str = Field(..., min_length=1, description="Имя проверки")
+    component: str = Field(
+        "validator/data-quality", description="Компонент для проверки"
+    )
+    applies_to: List[str] = Field(
+        default_factory=list, description="Этапы, к которым применяется"
+    )
+    config: Dict[str, Any] = Field(
+        default_factory=dict, description="Конфигурация проверки"
+    )
+
+    # Execution settings
+    fail_pipeline_on_error: bool = Field(
+        True, description="Остановить pipeline при ошибке"
+    )
+    warning_only: bool = Field(False, description="Только предупреждение, не ошибка")
+    retry_policy: Optional[RetryPolicy] = Field(
+        None, description="Политика повторных попыток"
+    )
+
+    @property
+    def component_type(self) -> str:
+        return self.component.split("/")[0]
+
+    @property
+    def component_name(self) -> str:
+        return self.component.split("/")[1]
+
+
+class NotificationConfig(BaseModel):
+    """Конфигурация уведомлений"""
+
+    enabled: bool = Field(False, description="Включить уведомления")
+    on_success: bool = Field(False, description="Уведомления при успехе")
+    on_failure: bool = Field(True, description="Уведомления при ошибке")
+    on_retry: bool = Field(False, description="Уведомления при повторе")
+
+    # Channels
+    email: Optional[List[str]] = Field(None, description="Email адреса")
+    slack_webhook: Optional[str] = Field(None, description="Slack webhook URL")
+    teams_webhook: Optional[str] = Field(None, description="Teams webhook URL")
+
+
+class MonitoringConfig(BaseModel):
+    """Конфигурация мониторинга"""
+
+    enabled: bool = Field(True, description="Включить мониторинг")
+
+    # Metrics
+    prometheus_enabled: bool = Field(True, description="Prometheus метрики")
+    prometheus_port: int = Field(
+        8000, ge=1024, le=65535, description="Порт для Prometheus"
+    )
+
+    # Logging
+    log_level: LogLevel = Field(LogLevel.INFO, description="Уровень логирования")
+    structured_logging: bool = Field(True, description="Структурированное логирование")
+    log_to_file: bool = Field(False, description="Логировать в файл")
+    log_file_path: Optional[str] = Field(None, description="Путь к файлу логов")
+
+    # Health checks
+    health_check_enabled: bool = Field(True, description="Health check endpoint")
+    health_check_port: int = Field(
+        8001, ge=1024, le=65535, description="Порт для health check"
+    )
+
+
+class TemporalConfig(BaseModel):
+    """Конфигурация Temporal"""
+
+    enabled: bool = Field(False, description="Использовать Temporal для оркестрации")
+
+    # Connection
+    server_address: str = Field("localhost:7233", description="Адрес Temporal сервера")
+    namespace: str = Field("default", description="Temporal namespace")
+
+    # Workflow settings
+    task_queue: str = Field("pipeline-tasks", description="Task queue для pipeline")
+    workflow_id_prefix: str = Field("pipeline", description="Префикс для Workflow ID")
+
+    # Timeouts
+    workflow_execution_timeout: Optional[int] = Field(
+        None, ge=1, description="Timeout для workflow"
+    )
+    workflow_run_timeout: Optional[int] = Field(
+        None, ge=1, description="Run timeout для workflow"
+    )
+    workflow_task_timeout: Optional[int] = Field(
+        None, ge=1, description="Task timeout для workflow"
+    )
+
+    # Security
+    tls_enabled: bool = Field(False, description="Использовать TLS")
+    cert_path: Optional[str] = Field(None, description="Путь к сертификату")
+    key_path: Optional[str] = Field(None, description="Путь к ключу")
+
+
+class PipelineMetadata(BaseModel):
+    """Метаданные pipeline"""
+
+    owner: str = Field("", description="Владелец pipeline")
+    description: str = Field("", description="Описание pipeline")
+
+    # Scheduling
+    schedule: Optional[str] = Field(None, description="Cron расписание")
+    timezone: str = Field("UTC", description="Временная зона")
+
+    # Categorization
+    tags: List[str] = Field(default_factory=list, description="Теги для категоризации")
+    category: Optional[str] = Field(None, description="Категория pipeline")
+    priority: int = Field(5, ge=1, le=10, description="Приоритет (1-10)")
+
+    # Environment
+    environment: Environment = Field(Environment.DEVELOPMENT, description="Окружение")
+
+    # Documentation
+    documentation_url: Optional[str] = Field(None, description="Ссылка на документацию")
+    repository_url: Optional[str] = Field(None, description="Ссылка на репозиторий")
+
+    @validator("schedule")
+    def validate_cron_schedule(cls, v):
+        """Валидация cron расписания"""
+        if v is not None:
+            # Простая проверка формата cron (5 или 6 полей)
+            fields = v.split()
+            if len(fields) not in [5, 6]:
+                raise ValueError("Cron schedule must have 5 or 6 fields")
+        return v
+
+
+class PipelineConfig(BaseModel):
+    """Полная конфигурация pipeline"""
+
+    # Basic info
+    name: str = Field(
+        ..., min_length=1, regex=r"^[a-zA-Z0-9-_]+$", description="Имя pipeline"
+    )
+    version: str = Field("1.0.0", regex=r"^\d+\.\d+\.\d+", description="Версия")
+
+    # Metadata
+    metadata: PipelineMetadata = Field(
+        default_factory=PipelineMetadata, description="Метаданные"
+    )
+
+    # Pipeline structure
+    stages: List[StageConfig] = Field(..., min_items=1, description="Этапы pipeline")
+    quality_checks: List[QualityCheck] = Field(
+        default_factory=list, description="Проверки качества"
+    )
+
+    # Global configuration
+    global_config: Dict[str, Any] = Field(
+        default_factory=dict, description="Глобальная конфигурация"
+    )
+
+    # Execution settings
+    continue_on_failure: bool = Field(
+        False, description="Продолжить выполнение при ошибке"
+    )
+    max_parallel_stages: int = Field(
+        10, ge=1, description="Максимум параллельных этапов"
+    )
+    default_timeout_seconds: int = Field(3600, ge=1, description="Timeout по умолчанию")
+
+    # Integration settings
+    temporal: TemporalConfig = Field(
+        default_factory=TemporalConfig, description="Настройки Temporal"
+    )
+    monitoring: MonitoringConfig = Field(
+        default_factory=MonitoringConfig, description="Настройки мониторинга"
+    )
+    notifications: NotificationConfig = Field(
+        default_factory=NotificationConfig, description="Настройки уведомлений"
+    )
+
+    @validator("stages")
+    def validate_stage_names_unique(cls, v):
+        """Проверка уникальности имен этапов"""
+        names = [stage.name for stage in v]
+        if len(names) != len(set(names)):
+            raise ValueError("Stage names must be unique")
+        return v
+
+    @root_validator
+    def validate_stage_dependencies(cls, values):
+        """Валидация зависимостей между этапами"""
+        stages = values.get("stages", [])
+        if not stages:
+            return values
+
+        stage_names = {stage.name for stage in stages}
+
+        for stage in stages:
+            for dep in stage.depends_on:
+                if dep not in stage_names:
+                    raise ValueError(
+                        f"Stage '{stage.name}' depends on unknown stage '{dep}'"
+                    )
+
+        # Проверка на циклические зависимости
+        if cls._has_circular_dependencies(stages):
+            raise ValueError("Circular dependencies detected in stages")
+
+        return values
+
+    @staticmethod
+    def _has_circular_dependencies(stages: List[StageConfig]) -> bool:
+        """Проверка на циклические зависимости"""
+        # Строим граф зависимостей
+        deps = {stage.name: set(stage.depends_on) for stage in stages}
+
+        # DFS для поиска циклов
+        def has_cycle(node, path, visited):
+            if node in path:
+                return True
+            if node in visited:
+                return False
+
+            path.add(node)
+            for neighbor in deps.get(node, []):
+                if has_cycle(neighbor, path, visited):
+                    return True
+            path.remove(node)
+            visited.add(node)
+            return False
+
+        visited = set()
+        for stage in stages:
+            if stage.name not in visited:
+                if has_cycle(stage.name, set(), visited):
+                    return True
+
+        return False
+
+    def get_execution_order(self) -> List[List[str]]:
+        """Получение порядка выполнения этапов (топологическая сортировка)"""
+        stages_dict = {stage.name: stage for stage in self.stages if stage.enabled}
+        visited = set()
+        execution_order = []
+
+        while len(visited) < len(stages_dict):
+            # Находим этапы без невыполненных зависимостей
+            ready_stages = []
+            for stage_name, stage in stages_dict.items():
+                if stage_name not in visited:
+                    deps_satisfied = all(dep in visited for dep in stage.depends_on)
+                    if deps_satisfied:
+                        ready_stages.append(stage_name)
+
+            if not ready_stages:
+                remaining = set(stages_dict.keys()) - visited
+                raise ValueError(f"Cannot resolve dependencies for stages: {remaining}")
+
+            execution_order.append(ready_stages)
+            visited.update(ready_stages)
+
+        return execution_order
+
+    def validate_components_exist(self, registry) -> List[str]:
+        """Валидация существования компонентов в реестре"""
+        errors = []
+
+        for stage in self.stages:
+            component = registry.get_component(
+                stage.component_type, stage.component_name
+            )
+            if not component:
+                errors.append(f"Component not found: {stage.component}")
+
+        for check in self.quality_checks:
+            component = registry.get_component(
+                check.component_type, check.component_name
+            )
+            if not component:
+                errors.append(f"Quality check component not found: {check.component}")
+
+        return errors
+
+    def substitute_environment_variables(self):
+        """Подстановка переменных окружения"""
+
+        def substitute_value(value):
+            if isinstance(value, str):
+                # Паттерн для ${VAR_NAME} или ${VAR_NAME:default_value}
+                pattern = r"\$\{([^}:]+)(?::([^}]*))?\}"
+
+                def replace_var(match):
+                    var_name = match.group(1)
+                    default_value = match.group(2) if match.group(2) is not None else ""
+                    return os.getenv(var_name, default_value)
+
+                return re.sub(pattern, replace_var, value)
+            elif isinstance(value, dict):
+                return {k: substitute_value(v) for k, v in value.items()}
+            elif isinstance(value, list):
+                return [substitute_value(v) for v in value]
+            return value
+
+        # Применяем подстановку ко всем полям
+        for stage in self.stages:
+            stage.config = substitute_value(stage.config)
+
+        for check in self.quality_checks:
+            check.config = substitute_value(check.config)
+
+        self.global_config = substitute_value(self.global_config)
+
+
+class RuntimeConfig(BaseModel):
+    """Конфигурация времени выполнения"""
+
+    run_id: str = Field(..., description="Идентификатор запуска")
+    dry_run: bool = Field(False, description="Режим сухого запуска")
+    resume_from_stage: Optional[str] = Field(None, description="Возобновить с этапа")
+    skip_stages: List[str] = Field(default_factory=list, description="Пропустить этапы")
+    override_config: Dict[str, Any] = Field(
+        default_factory=dict, description="Переопределение конфигурации"
+    )
+
+    # Execution context
+    triggered_by: str = Field("manual", description="Кто/что запустило pipeline")
+    trigger_time: datetime = Field(
+        default_factory=datetime.now, description="Время запуска"
+    )
+
+    # Environment overrides
+    environment_overrides: Dict[str, str] = Field(
+        default_factory=dict, description="Переопределение переменных окружения"
+    )
+
+
+# Модель для полной конфигурации с runtime
+class FullPipelineConfig(BaseModel):
+    """Полная конфигурация включая runtime"""
+
+    pipeline: PipelineConfig
+    runtime: Optional[RuntimeConfig] = None
+
+    class Config:
+        extra = "allow"

@@ -1,0 +1,17 @@
+[project]
+name = "stages"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Ryibalchenko.NV", email = "Ryibalchenko.NV@dns-shop.ru" }
+]
+requires-python = ">=3.13"
+dependencies = []
+
+[project.scripts]
+stages = "stages:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

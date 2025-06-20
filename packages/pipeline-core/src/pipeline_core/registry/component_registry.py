@@ -1,345 +1,597 @@
 """
-Реестр компонентов pipeline с поддержкой автоматического обнаружения
+Централизованный реестр компонентов с автоматическим обнаружением
+
+Поддерживает:
+- Автоматическое обнаружение через entry points
+- Регистрацию через декораторы
+- Directory-based discovery
+- Валидацию компонентов
+- Управление версиями
+- Hot reload в development режиме
 """
 
 import importlib
 import importlib.metadata
-import logging
-from typing import Dict, List, Type, Optional, Any
+import importlib.util
+import inspect
+import pkgutil
+import sys
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, Type, Optional, List, Set, Any, Callable
 from dataclasses import dataclass
+from enum import Enum
 
-from ..models.component import (
-    BaseComponent,
-    ComponentMetadata,
-    ComponentInfo,
-    ExecutionContext,
-    ComponentType,
-)
-from ..exceptions.errors import PipelineComponentError, PipelineRegistrationError
+import structlog
+
+from pipeline_core.components import BaseComponent, ComponentType
+
+logger = structlog.get_logger(__name__)
+
+
+class DiscoverySource(Enum):
+    """Источники обнаружения компонентов"""
+
+    ENTRY_POINT = "entry_point"
+    DECORATOR = "decorator"
+    AUTO_DISCOVERY = "auto_discovery"
+    MANUAL = "manual"
+    DIRECTORY_SCAN = "directory_scan"
 
 
 @dataclass
-class PluginInfo:
-    """Информация о плагине"""
+class ComponentInfo:
+    """Информация о зарегистрированном компоненте"""
 
+    component_class: Type[BaseComponent]
+    component_type: ComponentType
     name: str
-    entry_point: str
-    module_name: str
-    is_loaded: bool = False
-    error: Optional[str] = None
+    version: str
+    description: str
+    source: DiscoverySource
+    module_path: str
+    dependencies: List[str]
+    input_schema: Optional[Dict[str, Any]] = None
+    output_schema: Optional[Dict[str, Any]] = None
 
+    @property
+    def key(self) -> str:
+        """Уникальный ключ компонента"""
+        return f"{self.component_type.value}:{self.name}"
 
-class ComponentRegistry:
-    """Реестр компонентов pipeline"""
-
-    def __init__(self):
-        self._components: Dict[str, ComponentInfo] = {}
-        self._plugins: Dict[str, PluginInfo] = {}
-        self.logger = logging.getLogger("pipeline.registry")
-
-        # Автоматически загружаем компоненты при инициализации
-        self._discover_components()
-
-    def _discover_components(self) -> None:
-        """Автоматическое обнаружение компонентов через entry points"""
-        try:
-            # Ищем entry points с группой 'pipeline.components'
-            entry_points = importlib.metadata.entry_points(group="pipeline.components")
-
-            for entry_point in entry_points:
-                plugin_info = PluginInfo(
-                    name=entry_point.name,
-                    entry_point=str(entry_point),
-                    module_name=entry_point.module,
-                )
-
-                self._plugins[entry_point.name] = plugin_info
-
-                try:
-                    # Пытаемся загрузить компонент
-                    component_class = entry_point.load()
-                    self._register_component(
-                        entry_point.name, component_class, str(entry_point)
-                    )
-                    plugin_info.is_loaded = True
-
-                    self.logger.info(f"Загружен компонент: {entry_point.name}")
-
-                except Exception as e:
-                    plugin_info.error = str(e)
-                    self.logger.error(
-                        f"Ошибка загрузки компонента {entry_point.name}: {e}"
-                    )
-
-        except Exception as e:
-            self.logger.error(f"Ошибка обнаружения компонентов: {e}")
-
-    def _register_component(
-        self, name: str, component_class: Type[BaseComponent], entry_point: str
-    ) -> None:
-        """Регистрация компонента в реестре"""
-
-        # Проверяем что класс наследуется от BaseComponent
-        if not issubclass(component_class, BaseComponent):
-            raise PipelineRegistrationError(
-                f"Компонент {name} должен наследоваться от BaseComponent"
-            )
-
-        # Пытаемся создать экземпляр для получения метаданных
-        try:
-            # Создаем временный экземпляр с минимальной конфигурацией
-            temp_config = {"type": name}
-            temp_instance = component_class(temp_config)
-
-            # Получаем метаданные
-            metadata = self._extract_metadata(temp_instance, name)
-
-        except Exception as e:
-            # Если не можем создать экземпляр, создаем базовые метаданные
-            self.logger.warning(
-                f"Не удалось создать экземпляр {name} для извлечения метаданных: {e}"
-            )
-            metadata = ComponentMetadata(
-                name=name,
-                version="unknown",
-                description="Описание недоступно",
-                component_type="utility",  # Используем фиксированное значение
-            )
-
-        component_info = ComponentInfo(
-            component_class=component_class, metadata=metadata, entry_point=entry_point
-        )
-
-        self._components[name] = component_info
-        self.logger.debug(f"Зарегистрирован компонент: {name}")
-
-    def _extract_metadata(
-        self, component_instance: BaseComponent, name: str
-    ) -> ComponentMetadata:
-        """Извлечение метаданных из экземпляра компонента"""
-
-        # Пытаемся получить метаданные разными способами
-        if hasattr(component_instance, "get_metadata"):
-            try:
-                return component_instance.get_metadata()
-            except Exception as e:
-                self.logger.warning(f"Ошибка получения метаданных от {name}: {e}")
-
-        # Извлекаем информацию из класса
-        component_class = component_instance.__class__
-
-        # Безопасное получение описания
-        doc = getattr(component_class, "__doc__", None)
-        description = doc.strip() if doc else f"Компонент {name}"
-
-        return ComponentMetadata(
-            name=name,
-            version=getattr(component_class, "__version__", "1.0.0"),
-            description=description,
-            component_type=component_instance.get_component_type(),
-            author=getattr(component_class, "__author__", None),
-            tags=getattr(component_class, "__tags__", []),
-            dependencies=getattr(component_class, "__dependencies__", []),
-        )
-
-    def register(self, name: str, component_class: Type[BaseComponent]) -> None:
-        """
-        Ручная регистрация компонента
-
-        Args:
-            name: Имя компонента
-            component_class: Класс компонента
-        """
-        self._register_component(name, component_class, f"manual:{name}")
-        self.logger.info(f"Вручную зарегистрирован компонент: {name}")
-
-    def get_component_class(self, component_type: str) -> Type[BaseComponent]:
-        """
-        Получение класса компонента по типу
-
-        Args:
-            component_type: Тип компонента
-
-        Returns:
-            Type[BaseComponent]: Класс компонента
-
-        Raises:
-            PipelineComponentError: Если компонент не найден
-        """
-        if component_type not in self._components:
-            available = ", ".join(self._components.keys())
-            raise PipelineComponentError(
-                f"Компонент типа '{component_type}' не найден. "
-                f"Доступные типы: {available}"
-            )
-
-        return self._components[component_type].component_class
-
-    def create_component(
-        self, component_type: str, config: Dict[str, Any]
-    ) -> BaseComponent:
-        """
-        Создание экземпляра компонента
-
-        Args:
-            component_type: Тип компонента
-            config: Конфигурация компонента
-
-        Returns:
-            BaseComponent: Экземпляр компонента
-        """
-        component_class = self.get_component_class(component_type)
-
-        try:
-            # Добавляем тип в конфигурацию если его нет
-            if "type" not in config:
-                config = dict(config)
-                config["type"] = component_type
-
-            return component_class(config)
-
-        except Exception as e:
-            raise PipelineComponentError(
-                f"Ошибка создания компонента '{component_type}': {e}"
-            )
-
-    def list_components(self) -> List[str]:
-        """Получение списка доступных типов компонентов"""
-        return list(self._components.keys())
-
-    def get_component_info(self, component_type: str) -> Optional[ComponentInfo]:
-        """Получение информации о компоненте"""
-        return self._components.get(component_type)
-
-    def get_component_metadata(
-        self, component_type: str
-    ) -> Optional[ComponentMetadata]:
-        """Получение метаданных компонента"""
-        info = self.get_component_info(component_type)
-        return info.metadata if info else None
-
-    def get_component_schema(self, component_type: str) -> Optional[Dict[str, Any]]:
-        """Получение JSON схемы конфигурации компонента"""
-        try:
-            component_class = self.get_component_class(component_type)
-            temp_instance = component_class({"type": component_type})
-            return temp_instance.get_schema()
-        except Exception as e:
-            self.logger.error(f"Ошибка получения схемы для {component_type}: {e}")
-            return None
-
-    def validate_component_config(
-        self, component_type: str, config: Dict[str, Any]
-    ) -> List[str]:
-        """
-        Валидация конфигурации компонента
-
-        Returns:
-            List[str]: Список ошибок валидации (пустой если все ОК)
-        """
-        errors = []
-
-        try:
-            # Пытаемся создать компонент с данной конфигурацией
-            self.create_component(component_type, config)
-        except Exception as e:
-            errors.append(f"Ошибка валидации конфигурации: {e}")
-
-        return errors
-
-    def get_plugins_info(self) -> Dict[str, PluginInfo]:
-        """Получение информации о плагинах"""
-        return self._plugins.copy()
-
-    def reload_plugin(self, plugin_name: str) -> bool:
-        """
-        Перезагрузка плагина
-
-        Args:
-            plugin_name: Имя плагина
-
-        Returns:
-            bool: True если успешно перезагружен
-        """
-        if plugin_name not in self._plugins:
-            self.logger.error(f"Плагин {plugin_name} не найден")
-            return False
-
-        plugin_info = self._plugins[plugin_name]
-
-        try:
-            # Удаляем из реестра
-            if plugin_name in self._components:
-                del self._components[plugin_name]
-
-            # Перезагружаем модуль
-            module = importlib.import_module(plugin_info.module_name)
-            importlib.reload(module)
-
-            # Загружаем заново через entry point
-            entry_points = importlib.metadata.entry_points(group="pipeline.components")
-            for entry_point in entry_points:
-                if entry_point.name == plugin_name:
-                    component_class = entry_point.load()
-                    self._register_component(
-                        plugin_name, component_class, str(entry_point)
-                    )
-                    plugin_info.is_loaded = True
-                    plugin_info.error = None
-
-                    self.logger.info(f"Плагин {plugin_name} успешно перезагружен")
-                    return True
-
-            self.logger.error(f"Entry point для плагина {plugin_name} не найден")
-            return False
-
-        except Exception as e:
-            plugin_info.error = str(e)
-            plugin_info.is_loaded = False
-            self.logger.error(f"Ошибка перезагрузки плагина {plugin_name}: {e}")
-            return False
-
-    def health_check(self) -> Dict[str, Any]:
-        """Проверка состояния реестра"""
-        total_plugins = len(self._plugins)
-        loaded_plugins = sum(1 for p in self._plugins.values() if p.is_loaded)
-        failed_plugins = [
-            name for name, p in self._plugins.items() if not p.is_loaded and p.error
-        ]
-
+    def to_dict(self) -> Dict[str, Any]:
+        """Сериализация в словарь"""
         return {
-            "total_components": len(self._components),
-            "total_plugins": total_plugins,
-            "loaded_plugins": loaded_plugins,
-            "failed_plugins": failed_plugins,
-            "component_types": list(self._components.keys()),
+            "type": self.component_type.value,
+            "name": self.name,
+            "version": self.version,
+            "description": self.description,
+            "source": self.source.value,
+            "module_path": self.module_path,
+            "dependencies": self.dependencies,
+            "input_schema": self.input_schema,
+            "output_schema": self.output_schema,
         }
 
 
-# Глобальный экземпляр реестра
-_global_registry: Optional[ComponentRegistry] = None
-
-
-def get_registry() -> ComponentRegistry:
-    """Получение глобального экземпляра реестра"""
-    global _global_registry
-    if _global_registry is None:
-        _global_registry = ComponentRegistry()
-    return _global_registry
-
-
-def register_component(name: str):
+class ComponentRegistry:
     """
-    Декоратор для регистрации компонента
+    Централизованный реестр компонентов с автоматическим обнаружением
 
-    Usage:
-        @register_component("my-component")
-        class MyComponent(BaseComponent):
-            ...
+    Singleton pattern - один экземпляр на приложение
     """
 
-    def decorator(component_class: Type[BaseComponent]):
-        get_registry().register(name, component_class)
-        return component_class
+    _instance: Optional["ComponentRegistry"] = None
+    _components: Dict[str, ComponentInfo] = {}
+    _discovery_paths: Set[Path] = set()
+    _hooks: Dict[str, List[Callable]] = {"register": [], "unregister": []}
 
-    return decorator
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __init__(self):
+        if not hasattr(self, "_initialized"):
+            logger.info("Initializing ComponentRegistry")
+            self._discover_all_components()
+            self._initialized = True
+            logger.info(
+                "ComponentRegistry initialized", total_components=len(self._components)
+            )
+
+    # === Discovery methods ===
+
+    def _discover_all_components(self):
+        """Полное обнаружение всех компонентов"""
+
+        # 1. Entry points discovery
+        self._discover_via_entry_points()
+
+        # 2. Workspace packages discovery
+        self._discover_workspace_packages()
+
+        # 3. Directory-based discovery
+        self._discover_from_directories()
+
+        # 4. Current module discovery
+        self._discover_current_modules()
+
+    def _discover_via_entry_points(self):
+        """Обнаружение через entry points"""
+        try:
+            # Ищем entry points для компонентов
+            entry_point_groups = [
+                "pipeline_framework.components",
+                "pipeline_framework.extractors",
+                "pipeline_framework.transformers",
+                "pipeline_framework.loaders",
+                "pipeline_framework.validators",
+            ]
+
+            for group in entry_point_groups:
+                try:
+                    for entry_point in importlib.metadata.entry_points(group=group):
+                        try:
+                            component_class = entry_point.load()
+                            self._register_component_class(
+                                component_class, source=DiscoverySource.ENTRY_POINT
+                            )
+                            logger.debug(
+                                "Loaded component from entry point",
+                                component=entry_point.name,
+                                group=group,
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                "Failed to load component from entry point",
+                                entry_point=entry_point.name,
+                                error=str(e),
+                            )
+                except Exception:
+                    # Entry point group может не существовать
+                    continue
+
+        except Exception as e:
+            logger.warning("Entry points discovery failed", error=str(e))
+
+    def _discover_workspace_packages(self):
+        """Обнаружение компонентов в workspace packages"""
+
+        # Известные пакеты workspace
+        workspace_packages = ["extractor_sql", "stages", "loaders_sql", "polars"]
+
+        for package_name in workspace_packages:
+            try:
+                if package_name in sys.modules:
+                    module = sys.modules[package_name]
+                else:
+                    try:
+                        module = importlib.import_module(package_name)
+                    except ImportError:
+                        logger.debug(
+                            "Workspace package not found", package=package_name
+                        )
+                        continue
+
+                self._scan_module_for_components(module, DiscoverySource.AUTO_DISCOVERY)
+                logger.debug("Scanned workspace package", package=package_name)
+
+            except Exception as e:
+                logger.warning(
+                    "Failed to scan workspace package",
+                    package=package_name,
+                    error=str(e),
+                )
+
+    def _discover_from_directories(self):
+        """Обнаружение компонентов в директориях"""
+
+        # Добавляем стандартные пути для поиска
+        current_dir = Path(__file__).parent.parent
+        potential_paths = [
+            current_dir / "components",
+            current_dir.parent / "components",
+            Path.cwd() / "packages" / "components",
+            Path.cwd() / "components",
+        ]
+
+        for path in potential_paths:
+            if path.exists():
+                self._discovery_paths.add(path)
+                self._scan_directory_for_components(path)
+
+    def _discover_current_modules(self):
+        """Обнаружение компонентов в уже загруженных модулях"""
+
+        for module_name, module in sys.modules.items():
+            if module and hasattr(module, "__file__"):
+                # Сканируем только модули, которые выглядят как наши
+                if any(
+                    keyword in module_name.lower()
+                    for keyword in [
+                        "pipeline",
+                        "extractor",
+                        "transformer",
+                        "loader",
+                        "component",
+                    ]
+                ):
+                    self._scan_module_for_components(
+                        module, DiscoverySource.AUTO_DISCOVERY
+                    )
+
+    def _scan_directory_for_components(self, directory: Path):
+        """Сканирование директории на предмет компонентов"""
+
+        logger.debug("Scanning directory for components", path=str(directory))
+
+        for py_file in directory.rglob("*.py"):
+            if py_file.name.startswith("__"):
+                continue
+
+            try:
+                # Загружаем модуль из файла
+                spec = importlib.util.spec_from_file_location(
+                    f"dynamic_{py_file.stem}", py_file
+                )
+                if spec and spec.loader:
+                    module = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(module)
+
+                    self._scan_module_for_components(
+                        module, DiscoverySource.DIRECTORY_SCAN
+                    )
+
+            except Exception as e:
+                logger.debug(
+                    "Failed to load module from file", file=str(py_file), error=str(e)
+                )
+
+    def _scan_module_for_components(self, module, source: DiscoverySource):
+        """Сканирование модуля на предмет компонентов"""
+
+        if not module:
+            return
+
+        for name, obj in inspect.getmembers(module):
+            if (
+                inspect.isclass(obj)
+                and issubclass(obj, BaseComponent)
+                and obj != BaseComponent
+                and not inspect.isabstract(obj)
+            ):
+                self._register_component_class(obj, source=source)
+
+    # === Registration methods ===
+
+    def _register_component_class(
+        self,
+        component_class: Type[BaseComponent],
+        source: DiscoverySource = DiscoverySource.MANUAL,
+    ) -> bool:
+        """Регистрация класса компонента"""
+
+        if not self._validate_component_class(component_class):
+            return False
+
+        try:
+            # Получаем информацию о компоненте
+            component_info = self._create_component_info(component_class, source)
+
+            # Проверяем на дубликаты
+            if component_info.key in self._components:
+                existing = self._components[component_info.key]
+                logger.debug(
+                    "Component already registered",
+                    key=component_info.key,
+                    existing_source=existing.source.value,
+                    new_source=source.value,
+                )
+                return False
+
+            # Регистрируем компонент
+            self._components[component_info.key] = component_info
+
+            logger.debug(
+                "Component registered successfully",
+                key=component_info.key,
+                source=source.value,
+                module=component_info.module_path,
+            )
+
+            # Вызываем hooks
+            self._call_hooks("register", component_info)
+
+            return True
+
+        except Exception as e:
+            logger.error(
+                "Failed to register component",
+                component=component_class.__name__,
+                error=str(e),
+            )
+            return False
+
+    def _create_component_info(
+        self, component_class: Type[BaseComponent], source: DiscoverySource
+    ) -> ComponentInfo:
+        """Создание информации о компоненте"""
+
+        # Создаем временный экземпляр для получения метаданных
+        # (если у класса нет property без инициализации)
+        try:
+            temp_instance = component_class({})
+            component_type = temp_instance.component_type
+            name = temp_instance.name
+            version = temp_instance.version
+            description = temp_instance.description
+            dependencies = temp_instance.dependencies
+            input_schema = temp_instance.input_schema
+            output_schema = temp_instance.output_schema
+        except Exception:
+            # Fallback к class attributes
+            component_type = getattr(
+                component_class, "component_type", ComponentType.STAGE
+            )
+            name = getattr(component_class, "name", component_class.__name__.lower())
+            version = getattr(component_class, "version", "1.0.0")
+            description = getattr(
+                component_class, "description", component_class.__doc__ or ""
+            )
+            dependencies = getattr(component_class, "dependencies", [])
+            input_schema = getattr(component_class, "input_schema", None)
+            output_schema = getattr(component_class, "output_schema", None)
+
+        return ComponentInfo(
+            component_class=component_class,
+            component_type=component_type,
+            name=name,
+            version=version,
+            description=description.strip(),
+            source=source,
+            module_path=component_class.__module__,
+            dependencies=dependencies,
+            input_schema=input_schema,
+            output_schema=output_schema,
+        )
+
+    def _validate_component_class(self, component_class: Type[BaseComponent]) -> bool:
+        """Валидация класса компонента"""
+
+        try:
+            # Проверяем, что это подкласс BaseComponent
+            if not issubclass(component_class, BaseComponent):
+                return False
+
+            # Проверяем, что это не абстрактный класс
+            if inspect.isabstract(component_class):
+                return False
+
+            # Проверяем наличие обязательных атрибутов/методов
+            required_attrs = ["component_type", "name"]
+            for attr in required_attrs:
+                if not hasattr(component_class, attr):
+                    logger.warning(
+                        "Component missing required attribute",
+                        component=component_class.__name__,
+                        attribute=attr,
+                    )
+                    return False
+
+            return True
+
+        except Exception as e:
+            logger.warning(
+                "Component validation failed",
+                component=component_class.__name__,
+                error=str(e),
+            )
+            return False
+
+    # === Public API methods ===
+
+    @classmethod
+    def register(cls, component_type: Optional[str] = None):
+        """Декоратор для регистрации компонентов"""
+
+        def decorator(component_class):
+            registry = cls()
+            registry._register_component_class(
+                component_class, source=DiscoverySource.DECORATOR
+            )
+            return component_class
+
+        return decorator
+
+    def register_component(self, component_class: Type[BaseComponent]) -> bool:
+        """Ручная регистрация компонента"""
+        return self._register_component_class(
+            component_class, source=DiscoverySource.MANUAL
+        )
+
+    def unregister_component(self, component_type: str, name: str) -> bool:
+        """Отмена регистрации компонента"""
+        key = f"{component_type}:{name}"
+
+        if key in self._components:
+            component_info = self._components.pop(key)
+            logger.info("Component unregistered", key=key)
+
+            # Вызываем hooks
+            self._call_hooks("unregister", component_info)
+            return True
+
+        return False
+
+    def get_component(
+        self, component_type: str, name: str
+    ) -> Optional[Type[BaseComponent]]:
+        """Получение класса компонента по типу и имени"""
+        key = f"{component_type}:{name}"
+        component_info = self._components.get(key)
+        return component_info.component_class if component_info else None
+
+    def get_component_info(
+        self, component_type: str, name: str
+    ) -> Optional[ComponentInfo]:
+        """Получение информации о компоненте"""
+        key = f"{component_type}:{name}"
+        return self._components.get(key)
+
+    def list_components(
+        self, component_type: Optional[str] = None
+    ) -> List[ComponentInfo]:
+        """Получение списка зарегистрированных компонентов"""
+        components = list(self._components.values())
+
+        if component_type:
+            components = [
+                c for c in components if c.component_type.value == component_type
+            ]
+
+        # Сортируем по типу, затем по имени
+        return sorted(components, key=lambda c: (c.component_type.value, c.name))
+
+    def list_component_types(self) -> List[str]:
+        """Получение списка типов компонентов"""
+        types = {info.component_type.value for info in self._components.values()}
+        return sorted(list(types))
+
+    def search_components(self, query: str) -> List[ComponentInfo]:
+        """Поиск компонентов по запросу"""
+        query_lower = query.lower()
+        results = []
+
+        for component_info in self._components.values():
+            # Поиск в имени, описании, типе
+            searchable_text = " ".join(
+                [
+                    component_info.name,
+                    component_info.description,
+                    component_info.component_type.value,
+                    component_info.module_path,
+                ]
+            ).lower()
+
+            if query_lower in searchable_text:
+                results.append(component_info)
+
+        return results
+
+    def reload_component(self, component_type: str, name: str) -> bool:
+        """Перезагрузка компонента (для development)"""
+        key = f"{component_type}:{name}"
+        component_info = self._components.get(key)
+
+        if not component_info:
+            return False
+
+        try:
+            # Перезагружаем модуль
+            module = importlib.reload(sys.modules[component_info.module_path])
+
+            # Удаляем старую регистрацию
+            self.unregister_component(component_type, name)
+
+            # Сканируем модуль заново
+            self._scan_module_for_components(module, DiscoverySource.AUTO_DISCOVERY)
+
+            logger.info("Component reloaded", key=key)
+            return True
+
+        except Exception as e:
+            logger.error("Failed to reload component", key=key, error=str(e))
+            return False
+
+    def add_discovery_path(self, path: Path):
+        """Добавление пути для поиска компонентов"""
+        if path.exists():
+            self._discovery_paths.add(path)
+            self._scan_directory_for_components(path)
+            logger.info("Added discovery path", path=str(path))
+
+    def rescan_all(self):
+        """Повторное сканирование всех источников"""
+        logger.info("Rescanning all component sources")
+        old_count = len(self._components)
+
+        # Очищаем текущие компоненты (кроме manually registered)
+        manual_components = {
+            k: v
+            for k, v in self._components.items()
+            if v.source == DiscoverySource.MANUAL
+        }
+        self._components = manual_components
+
+        # Заново обнаруживаем
+        self._discover_all_components()
+
+        new_count = len(self._components)
+        logger.info("Rescan completed", old_count=old_count, new_count=new_count)
+
+    # === Hooks system ===
+
+    def add_hook(self, event: str, callback: Callable):
+        """Добавление hook для событий регистрации"""
+        if event in self._hooks:
+            self._hooks[event].append(callback)
+
+    def remove_hook(self, event: str, callback: Callable):
+        """Удаление hook"""
+        if event in self._hooks and callback in self._hooks[event]:
+            self._hooks[event].remove(callback)
+
+    def _call_hooks(self, event: str, component_info: ComponentInfo):
+        """Вызов hooks для события"""
+        for callback in self._hooks.get(event, []):
+            try:
+                callback(component_info)
+            except Exception as e:
+                logger.warning("Hook execution failed", event=event, error=str(e))
+
+    # === Statistics and debugging ===
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Получение статистики реестра"""
+        stats = {
+            "total_components": len(self._components),
+            "by_type": {},
+            "by_source": {},
+            "discovery_paths": [str(p) for p in self._discovery_paths],
+        }
+
+        for component_info in self._components.values():
+            # По типам
+            type_name = component_info.component_type.value
+            stats["by_type"][type_name] = stats["by_type"].get(type_name, 0) + 1
+
+            # По источникам
+            source_name = component_info.source.value
+            stats["by_source"][source_name] = stats["by_source"].get(source_name, 0) + 1
+
+        return stats
+
+    def validate_all_components(self) -> Dict[str, List[str]]:
+        """Валидация всех зарегистрированных компонентов"""
+        results = {"valid": [], "invalid": []}
+
+        for key, component_info in self._components.items():
+            try:
+                # Попытка создания экземпляра
+                component_info.component_class({})
+                results["valid"].append(key)
+            except Exception as e:
+                results["invalid"].append(f"{key}: {str(e)}")
+
+        return results
+
+    def export_registry(self) -> Dict[str, Any]:
+        """Экспорт реестра в формате JSON"""
+        return {
+            "components": {
+                key: info.to_dict() for key, info in self._components.items()
+            },
+            "stats": self.get_stats(),
+            "timestamp": str(datetime.now()),
+        }

@@ -1,184 +1,102 @@
 """
-Pipeline Core - Ядро фреймворка для создания data pipeline
+Pipeline Core - Модульный framework для data workflows с Temporal integration
+
+Основные компоненты:
+- BaseComponent: Базовый класс для всех компонентов
+- ComponentRegistry: Система регистрации и обнаружения компонентов
+- Pipeline: Orchestrator для выполнения workflows
+- TemporalClient: Интеграция с Temporal
 """
 
-__version__ = "0.1.0"
-__author__ = "Pipeline Framework Team"
-
-# Импорты основных классов и функций
-from .models.component import (
+from pipeline_core.components import (
     BaseComponent,
-    ComponentConfig,
+    BaseExtractor,
+    BaseTransformer,
+    BaseLoader,
+    BaseValidator,
     ExecutionContext,
     ExecutionResult,
     ExecutionStatus,
     ComponentType,
-    ComponentMetadata,
-    ComponentInfo,
+    ExecutionMetadata,
 )
 
-from .models.pipeline import (
+from pipeline_core.registry import ComponentRegistry
+
+from .pipeline.executor import Pipeline, PipelineBuilder
+
+from pipeline_core.config import (
     PipelineConfig,
-    PipelineMetadata,
     StageConfig,
-    ScheduleConfig,
-    ResourceLimits,
-    PipelineExecution,
+    RetryPolicy,
+    PipelineMetadata,
+    YAMLConfigLoader,
 )
 
-from .parser.yaml_parser import PipelineYAMLParser, YAMLTemplateProcessor
+from pipeline_core.temporal import TemporalClient
+from pipeline_core.temporal import ComponentActivity
+from pipeline_core.temporal import DataPipelineWorkflow
 
-from .registry.component_registry import (
-    ComponentRegistry,
-    get_registry,
-    register_component,
-)
+from pipeline_core.observability import setup_logging, get_logger
+from pipeline_core.observability import MetricsCollector
 
-from .exceptions.errors import (
-    PipelineError,
-    PipelineConfigError,
-    PipelineValidationError,
-    PipelineComponentError,
-    PipelineExecutionError,
-    PipelineDependencyError,
-    PipelineTimeoutError,
-    PipelineRetryExhaustedError,
-    PipelineResourceError,
-    PipelineDataError,
-    PipelineConnectionError,
-)
+# Version
+__version__ = "0.1.0"
 
-from .utils.logging import (
-    setup_logging,
-    get_pipeline_logger,
-    log_execution_start,
-    log_execution_success,
-    log_execution_failure,
-    log_pipeline_start,
-    log_pipeline_completion,
-    with_log_context,
-)
-
-# Экспорт всех публичных API
+# Public API
 __all__ = [
-    # Версия
-    "__version__",
-    "__author__",
-    # Базовые модели
+    # Core components
     "BaseComponent",
-    "ComponentConfig",
+    "BaseExtractor",
+    "BaseTransformer",
+    "BaseLoader",
+    "BaseValidator",
+    # Execution context and results
     "ExecutionContext",
     "ExecutionResult",
     "ExecutionStatus",
     "ComponentType",
-    "ComponentMetadata",
-    "ComponentInfo",
-    # Pipeline модели
-    "PipelineConfig",
-    "PipelineMetadata",
-    "StageConfig",
-    "ScheduleConfig",
-    "ResourceLimits",
-    "PipelineExecution",
-    # Парсер
-    "PipelineYAMLParser",
-    "YAMLTemplateProcessor",
-    # Реестр компонентов
+    "ExecutionMetadata",
+    # Registry
     "ComponentRegistry",
-    "get_registry",
-    "register_component",
-    # Исключения
-    "PipelineError",
-    "PipelineConfigError",
-    "PipelineValidationError",
-    "PipelineComponentError",
-    "PipelineExecutionError",
-    "PipelineDependencyError",
-    "PipelineTimeoutError",
-    "PipelineRetryExhaustedError",
-    "PipelineResourceError",
-    "PipelineDataError",
-    "PipelineConnectionError",
-    # Утилиты логирования
+    # Pipeline orchestration
+    "Pipeline",
+    "PipelineBuilder",
+    # Configuration
+    "PipelineConfig",
+    "StageConfig",
+    "RetryPolicy",
+    "PipelineMetadata",
+    "YAMLConfigLoader",
+    # Temporal integration
+    "TemporalClient",
+    "ComponentActivity",
+    "DataPipelineWorkflow",
+    # Observability
     "setup_logging",
-    "get_pipeline_logger",
-    "log_execution_start",
-    "log_execution_success",
-    "log_execution_failure",
-    "log_pipeline_start",
-    "log_pipeline_completion",
-    "with_log_context",
+    "get_logger",
+    "MetricsCollector",
+    # Version
+    "__version__",
 ]
 
 
-def get_version() -> str:
-    """Получить версию библиотеки"""
-    return __version__
+def main() -> None:
+    """Entry point для CLI"""
+    from .cli.main import app
+
+    app()
 
 
-def create_simple_component(component_type: str, execute_func):
-    """
-    Утилита для создания простого компонента из функции
+# Автоматическая инициализация при импорте
+def _auto_initialize():
+    """Автоматическая инициализация framework'а"""
+    # Настройка логирования по умолчанию
+    setup_logging()
 
-    Args:
-        component_type: Тип компонента
-        execute_func: Функция выполнения, принимающая context и возвращающая результат
-
-    Returns:
-        Type[BaseComponent]: Класс компонента
-
-    Example:
-        def my_transform(context):
-            data = context.get_stage_data("extract")
-            # обработка данных
-            return processed_data
-
-        MyComponent = create_simple_component("my-transform", my_transform)
-        register_component("my-transform")(MyComponent)
-    """
-
-    class SimpleComponent(BaseComponent):
-        def get_config_model(self):
-            return ComponentConfig
-
-        def execute(self, context: ExecutionContext) -> ExecutionResult:
-            import time
-
-            start_time = time.time()
-
-            try:
-                result_data = execute_func(context)
-                execution_time = time.time() - start_time
-
-                # Подсчет записей более точно
-                processed_records = 1
-                if hasattr(result_data, "__len__"):
-                    try:
-                        # Проверяем что это не строка (у строк тоже есть __len__)
-                        if not isinstance(result_data, str):
-                            processed_records = len(result_data)
-                    except (TypeError, AttributeError):
-                        processed_records = 1
-
-                return ExecutionResult(
-                    status=ExecutionStatus.SUCCESS,
-                    data=result_data,
-                    execution_time=execution_time,
-                    processed_records=processed_records,
-                )
-            except Exception as e:
-                execution_time = time.time() - start_time
-                return ExecutionResult(
-                    status=ExecutionStatus.FAILED,
-                    error_message=str(e),
-                    execution_time=execution_time,
-                )
-
-    SimpleComponent.__name__ = f"SimpleComponent_{component_type.replace('-', '_')}"
-    return SimpleComponent
+    # Инициализация реестра компонентов
+    ComponentRegistry()
 
 
-# Настройка базового логирования при импорте
-import logging
-
-logging.getLogger("pipeline").addHandler(logging.NullHandler())
+# Выполняем автоинициализацию
+_auto_initialize()
