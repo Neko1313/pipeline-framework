@@ -243,14 +243,14 @@ extractor = SQLExtractor(config)
 ### PostgreSQL
 
 ```python
-from extractor_sql import PostgreSQLExtractor, SQLExtractorConfig
+from extractor_sql import PostgresSQLExtractor, SQLExtractorConfig
 
 config = SQLExtractorConfig(
     connection_string="postgresql+asyncpg://user:pass@localhost:5432/db",
     query_config=QueryConfig(query="SELECT * FROM users")
 )
 
-extractor = PostgreSQLExtractor(config)
+extractor = PostgresSQLExtractor(config)
 ```
 
 **Connection strings примеры:**

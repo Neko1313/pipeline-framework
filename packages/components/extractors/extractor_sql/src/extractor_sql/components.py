@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Literal, TypeAlias
+from typing import Any, Literal, TypeAlias, Dict, Union, Optional
 from urllib.parse import urlparse
-import warnings
 
 import pandas as pd
 import polars as pl
@@ -39,7 +38,7 @@ from pipeline_core.components.base import (
     ExecutionMetadata,
     ExecutionResult,
 )
-from pipeline_core.config.settings import ComponentSettings
+from pipeline_core.config import ComponentSettings
 
 # Типы для работы с данными
 DataFormat: TypeAlias = Literal["pandas", "polars", "dict", "raw"]
@@ -127,25 +126,11 @@ class QueryConfig(BaseModel):
 
     @field_validator("query")
     @classmethod
-    def validate_query(cls, v: str) -> str:
-        """Валидация SQL запроса"""
-        v = v.strip()
-        if not v:
+    def validate_query_not_empty(cls, v):
+        """Валидация что запрос не пустой"""
+        if not v or not v.strip():
             raise ValueError("SQL query cannot be empty")
-
-        # Проверяем на наличие потенциально опасных операций
-        dangerous_keywords = ["DROP", "DELETE", "TRUNCATE", "UPDATE", "INSERT", "ALTER"]
-        query_upper = v.upper()
-
-        for keyword in dangerous_keywords:
-            if keyword in query_upper:
-                warnings.warn(
-                    f"Potentially dangerous SQL keyword '{keyword}' detected in query",
-                    UserWarning,
-                    stacklevel=2,
-                )
-
-        return v
+        return v.strip()
 
 
 class RetryConfig(BaseModel):
@@ -236,12 +221,13 @@ class SQLExtractorConfig(ComponentSettings):
     @classmethod
     def validate_connection_string(cls, v: str) -> str:
         """Валидация строки подключения"""
+        if not v or not v.strip():
+            raise ValueError("Connection string cannot be empty")
+
         try:
             parsed = urlparse(v)
             if not parsed.scheme:
-                raise ValueError(
-                    "Connection string must include a scheme (e.g., postgresql://)"
-                )
+                raise ValueError("Invalid connection string: missing scheme")
             return v
         except Exception as e:
             raise ValueError(f"Invalid connection string: {e}")
@@ -265,28 +251,91 @@ class SQLExtractor(BaseExtractor[pd.DataFrame, SQLExtractorConfig]):
     - Мониторинг и метрики
     """
 
-    def __init__(
-        self,
-        config: SQLExtractorConfig,
-        name: str = "sql-extractor",
-        description: str | None = None,
-    ):
-        super().__init__(config, name, description or "SQL Data Extractor")
+    name = "base_sql"
 
-        # Внутренние атрибуты
-        self._engine: AsyncEngine | None = None
-        self._session_factory: async_sessionmaker[AsyncSession] | None = None
-        self._metadata: MetaData | None = None
+    def __init__(self, config: Union[Dict[str, Any], SQLExtractorConfig]):
+        # Создаем конфигурацию если передан словарь
+        if isinstance(config, dict):
+            self.config = SQLExtractorConfig(**config)
+        else:
+            self.config = config
 
-        # Кэш для схемы БД
-        self._schema_cache: dict[str, Table] = {}
+        # Инициализируем базовый компонент
+        super().__init__(self.config)
 
-        # Установка retry декоратора
-        self._setup_retry_decorator()
+        # Инициализируем SQLAlchemy engine (будет создан при первом использовании)
+        self._engine: Optional[AsyncEngine] = None
+        self._session_factory: Optional[async_sessionmaker] = None
 
-    @property
-    def name(self) -> str:
-        return self._name
+        # Настройка метрик
+        self._setup_sql_metrics()
+
+        # Валидация конфигурации
+        self._validate_config()
+
+        self.logger.info(
+            "SQLExtractor initialized",
+            dialect=self.config.inferred_dialect,
+            output_format=self.config.output_format,
+        )
+
+    def _setup_sql_metrics(self):
+        """Настройка SQL-специфичных метрик"""
+        try:
+            # Настраиваем метрики если prometheus доступен
+            self.sql_queries_counter = SQL_QUERIES_TOTAL.labels(
+                extractor_name=self.name,
+                dialect=self.config.inferred_dialect,
+                status="success",
+            )
+            self.sql_duration_histogram = SQL_QUERY_DURATION.labels(
+                extractor_name=self.name, dialect=self.config.inferred_dialect
+            )
+        except Exception as e:
+            self.logger.warning("Failed to setup SQL metrics", error=str(e))
+
+    def _validate_config(self):
+        """Валидация конфигурации экстрактора"""
+        try:
+            # Проверяем строку подключения
+            if not self.config.connection_string:
+                raise ValueError("Connection string is required")
+
+            # Проверяем что запрос не пустой
+            if not self.config.query_config.query:
+                raise ValueError("SQL query is required")
+
+            # Проверяем формат вывода
+            valid_formats = ["pandas", "polars", "dict", "raw"]
+            if self.config.output_format not in valid_formats:
+                raise ValueError(
+                    f"Invalid output format. Must be one of: {valid_formats}"
+                )
+
+            self.logger.debug("Configuration validation passed")
+
+        except Exception as e:
+            self.logger.error("Configuration validation failed", error=str(e))
+            raise
+
+    async def initialize(self) -> None:
+        """Инициализация экстрактора"""
+        await super().initialize()
+
+        # Создаем engine при инициализации
+        await self._ensure_engine()
+
+        self.logger.info("SQLExtractor initialized successfully")
+
+    async def cleanup(self) -> None:
+        """Очистка ресурсов"""
+        if self._engine:
+            await self._engine.dispose()
+            self._engine = None
+            self._session_factory = None
+
+        await super().cleanup()
+        self.logger.info("SQLExtractor cleanup completed")
 
     @property
     def component_type(self) -> ComponentType:
@@ -621,31 +670,148 @@ class SQLExtractor(BaseExtractor[pd.DataFrame, SQLExtractorConfig]):
         else:
             raise ValueError(f"Unsupported output format: {output_format}")
 
+    async def _execute_impl(self, context: ExecutionContext) -> pd.DataFrame:
+        """
+        Базовая реализация извлечения данных через SQL
+
+        Args:
+            context: Контекст выполнения
+
+        Returns:
+            DataFrame с данными
+        """
+        try:
+            # Инициализация если нужно
+            if not self._engine:
+                await self._ensure_engine()
+
+            # Выполнение запроса
+            async with self._engine.begin() as conn:
+                # Подготавливаем параметры
+                params = self.config.query_config.parameters or {}
+
+                # Выполняем запрос
+                result = await conn.execute(
+                    text(self.config.query_config.query), params
+                )
+
+                # Получаем данные
+                rows = result.fetchall()
+                columns = result.keys()
+
+                # Создаем DataFrame
+                if self.config.output_format == "pandas":
+                    df = pd.DataFrame(rows, columns=columns)
+                    return df
+                elif self.config.output_format == "polars":
+                    df = pd.DataFrame(rows, columns=columns)
+                    return pl.from_pandas(df)
+                elif self.config.output_format == "dict":
+                    return [dict(zip(columns, row, strict=False)) for row in rows]
+                else:  # raw
+                    return {"columns": list(columns), "rows": rows}
+
+        except Exception as e:
+            self.logger.error("SQL execution failed", error=str(e))
+            raise
+
+    async def _ensure_engine(self):
+        """Обеспечивает создание engine если его нет"""
+        if not self._engine:
+            self._engine = create_async_engine(
+                self.config.connection_string, **self.config.engine_options
+            )
+
 
 # ================================
 # Specialized SQL Extractors
 # ================================
 
 
-class PostgreSQLExtractor(SQLExtractor):
-    """Специализированный PostgreSQL Extractor"""
+class PostgresSQLExtractor(SQLExtractor):
+    """Специализированный экстрактор для PostgresSQL"""
 
-    def __init__(self, config: SQLExtractorConfig, **kwargs):
-        super().__init__(config, name="postgresql-extractor", **kwargs)
+    name = "postgresql"
+    description = "PostgresSQL data extractor with advanced features"
+
+    def __init__(self, config: Union[Dict[str, Any], SQLExtractorConfig]):
+        # Настройки специфичные для PostgresSQL
+        if isinstance(config, dict):
+            # Устанавливаем драйвер по умолчанию для PostgresSQL
+            if "connection_string" in config and not any(
+                driver in config["connection_string"]
+                for driver in ["asyncpg", "psycopg2"]
+            ):
+                # Добавляем asyncpg если драйвер не указан
+                conn_str = config["connection_string"]
+                if conn_str.startswith("postgresql://"):
+                    config["connection_string"] = conn_str.replace(
+                        "postgresql://", "postgresql+asyncpg://"
+                    )
+
+        super().__init__(config)
+
+    async def _execute_impl(self, context: ExecutionContext) -> pd.DataFrame:
+        """Реализация для PostgresSQL с дополнительными возможностями"""
+        return await super()._execute_impl(context)
 
 
 class MySQLExtractor(SQLExtractor):
-    """Специализированный MySQL Extractor"""
+    """Специализированный экстрактор для MySQL"""
 
-    def __init__(self, config: SQLExtractorConfig, **kwargs):
-        super().__init__(config, name="mysql-extractor", **kwargs)
+    name = "mysql"
+    description = "MySQL data extractor with performance optimizations"
+
+    def __init__(self, config: Union[Dict[str, Any], SQLExtractorConfig]):
+        # Настройки специфичные для MySQL
+        if isinstance(config, dict):
+            # Устанавливаем драйвер по умолчанию для MySQL
+            if "connection_string" in config and not any(
+                driver in config["connection_string"]
+                for driver in ["aiomysql", "pymysql"]
+            ):
+                # Добавляем aiomysql если драйвер не указан
+                conn_str = config["connection_string"]
+                if conn_str.startswith("mysql://"):
+                    config["connection_string"] = conn_str.replace(
+                        "mysql://", "mysql+aiomysql://"
+                    )
+
+        super().__init__(config)
+
+    async def _execute_impl(self, context: ExecutionContext) -> pd.DataFrame:
+        """Реализация для MySQL с дополнительными возможностями"""
+        # Используем базовую реализацию, но можем добавить MySQL-специфичную логику
+        return await super()._execute_impl(context)
 
 
 class SQLiteExtractor(SQLExtractor):
-    """Специализированный SQLite Extractor"""
+    """Специализированный экстрактор для SQLite"""
 
-    def __init__(self, config: SQLExtractorConfig, **kwargs):
-        super().__init__(config, name="sqlite-extractor", **kwargs)
+    name = "sqlite"
+    description = "SQLite data extractor for local databases"
+
+    def __init__(self, config: Union[Dict[str, Any], SQLExtractorConfig]):
+        # Настройки специфичные для SQLite
+        if isinstance(config, dict):
+            # Устанавливаем драйвер по умолчанию для SQLite
+            if "connection_string" in config and not any(
+                driver in config["connection_string"]
+                for driver in ["aiosqlite", "pysqlite"]
+            ):
+                # Добавляем aiosqlite если драйвер не указан
+                conn_str = config["connection_string"]
+                if conn_str.startswith("sqlite://"):
+                    config["connection_string"] = conn_str.replace(
+                        "sqlite://", "sqlite+aiosqlite://"
+                    )
+
+        super().__init__(config)
+
+    async def _execute_impl(self, context: ExecutionContext) -> pd.DataFrame:
+        """Реализация для SQLite с дополнительными возможностями"""
+        # Используем базовую реализацию, но можем добавить SQLite-специфичную логику
+        return await super()._execute_impl(context)
 
 
 # ================================
@@ -677,3 +843,40 @@ async def test_query_syntax(engine: AsyncEngine, query: str) -> bool:
         return True
     except Exception:
         return False
+
+
+def create_extractor(
+    connection_string: str, query: str, output_format: DataFormat = "pandas", **kwargs
+) -> SQLExtractor:
+    """
+    Фабричная функция для создания подходящего экстрактора
+
+    Args:
+        connection_string: Строка подключения к БД
+        query: SQL запрос
+        output_format: Формат выходных данных
+        **kwargs: Дополнительные параметры конфигурации
+
+    Returns:
+        SQLExtractor: Подходящий экстрактор для типа БД
+    """
+    # Определяем тип БД по connection string
+    if "postgresql" in connection_string:
+        extractor_class = PostgresSQLExtractor
+    elif "mysql" in connection_string:
+        extractor_class = MySQLExtractor
+    elif "sqlite" in connection_string:
+        extractor_class = SQLiteExtractor
+    else:
+        # По умолчанию используем базовый SQLExtractor
+        extractor_class = SQLExtractor
+
+    # Создаем конфигурацию
+    config = SQLExtractorConfig(
+        connection_string=connection_string,
+        query_config=QueryConfig(query=query),
+        output_format=output_format,
+        **kwargs,
+    )
+
+    return extractor_class(config)

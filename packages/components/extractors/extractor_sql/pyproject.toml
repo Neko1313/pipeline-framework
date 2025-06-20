@@ -89,7 +89,7 @@ docs = [
 
 [project.entry-points."pipeline_framework.extractors"]
 sql = "extractor_sql.components:SQLExtractor"
-postgresql = "extractor_sql.components:PostgreSQLExtractor"
+postgresql = "extractor_sql.components:PostgresSQLExtractor"
 mysql = "extractor_sql.components:MySQLExtractor"
 sqlite = "extractor_sql.components:SQLiteExtractor"
 

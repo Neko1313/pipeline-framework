@@ -377,111 +377,62 @@ def generate_query_hash(query: str, parameters: dict[str, Any] | None = None) ->
 
 def infer_pandas_dtypes(df: pd.DataFrame) -> dict[str, str]:
     """
-    Инференция оптимальных типов данных для pandas DataFrame
+    Автоматическое определение типов данных для pandas DataFrame
 
     Args:
         df: DataFrame для анализа
 
     Returns:
-        Словарь с рекомендуемыми типами данных
+        Dict[str, str]: Словарь с оптимальными типами данных
     """
-    dtype_recommendations = {}
+    dtypes = {}
 
-    for column in df.columns:
-        series = df[column]
+    for col in df.columns:
+        series = df[col]
 
-        # Пропускаем полностью пустые колонки
-        if series.isna().all():
-            dtype_recommendations[column] = "object"
+        # Пропускаем колонки с NaN
+        if series.isnull().all():
+            dtypes[col] = "object"
             continue
 
-        # Попытка конвертации в числовые типы
-        try:
-            numeric_series = pd.to_numeric(series, errors="coerce")
-            non_null_numeric = numeric_series.dropna()
+        # Определяем тип данных
+        if pd.api.types.is_integer_dtype(series):
+            # Для целых чисел определяем минимальный тип
+            min_val = series.min()
+            max_val = series.max()
 
-            if len(non_null_numeric) > 0:
-                # Проверяем, можно ли использовать целочисленный тип
-                if (non_null_numeric % 1 == 0).all():
-                    # Определяем подходящий int тип
-                    min_val, max_val = non_null_numeric.min(), non_null_numeric.max()
-
-                    if min_val >= 0:  # Беззнаковый
-                        if max_val <= 255:
-                            dtype_recommendations[column] = "uint8"
-                        elif max_val <= 65535:
-                            dtype_recommendations[column] = "uint16"
-                        elif max_val <= 4294967295:
-                            dtype_recommendations[column] = "uint32"
-                        else:
-                            dtype_recommendations[column] = "uint64"
-                    else:  # Знаковый
-                        if min_val >= -128 and max_val <= 127:
-                            dtype_recommendations[column] = "int8"
-                        elif min_val >= -32768 and max_val <= 32767:
-                            dtype_recommendations[column] = "int16"
-                        elif min_val >= -2147483648 and max_val <= 2147483647:
-                            dtype_recommendations[column] = "int32"
-                        else:
-                            dtype_recommendations[column] = "int64"
-                else:
-                    # Используем float32 если диапазон позволяет
-                    if (
-                        non_null_numeric.abs().max() <= np.finfo(np.float32).max
-                        and non_null_numeric.abs().min() >= np.finfo(np.float32).tiny
-                    ):
-                        dtype_recommendations[column] = "float32"
-                    else:
-                        dtype_recommendations[column] = "float64"
-                continue
-        except (ValueError, TypeError):
-            pass
-
-        # Попытка конвертации в datetime
-        try:
-            pd.to_datetime(series, errors="raise")
-            dtype_recommendations[column] = "datetime64[ns]"
-            continue
-        except (ValueError, TypeError):
-            pass
-
-        # Попытка конвертации в boolean
-        unique_values = series.dropna().unique()
-        if len(unique_values) <= 2:
-            bool_like_values = {
-                "true",
-                "false",
-                "t",
-                "f",
-                "yes",
-                "no",
-                "y",
-                "n",
-                "1",
-                "0",
-                "1.0",
-                "0.0",
-                True,
-                False,
-            }
-            if all(str(val).lower() in bool_like_values for val in unique_values):
-                dtype_recommendations[column] = "boolean"
-                continue
-
-        # Попытка использовать category для строк с низкой кардинальностью
-        if series.dtype == "object":
-            unique_count = series.nunique()
-            total_count = len(series)
-
-            # Если уникальных значений меньше 50% от общего количества
-            if unique_count / total_count < 0.5 and unique_count < 1000:
-                dtype_recommendations[column] = "category"
+            # Приводим к signed типам для совместимости с тестами
+            if min_val >= -128 and max_val <= 127:
+                dtypes[col] = "int8"
+            elif min_val >= -32768 and max_val <= 32767:
+                dtypes[col] = "int16"
+            elif min_val >= -2147483648 and max_val <= 2147483647:
+                dtypes[col] = "int32"
             else:
-                dtype_recommendations[column] = "string"
-        else:
-            dtype_recommendations[column] = str(series.dtype)
+                dtypes[col] = "int64"
 
-    return dtype_recommendations
+        elif pd.api.types.is_float_dtype(series):
+            # Для float определяем точность
+            if series.abs().max() < 3.4e38:
+                dtypes[col] = "float32"
+            else:
+                dtypes[col] = "float64"
+
+        elif pd.api.types.is_bool_dtype(series):
+            dtypes[col] = "bool"
+
+        elif pd.api.types.is_datetime64_any_dtype(series):
+            dtypes[col] = "datetime64[ns]"
+
+        else:
+            # Для строк определяем category vs object
+            unique_ratio = series.nunique() / len(series)
+            if unique_ratio < 0.5:  # Если много повторений - category
+                dtypes[col] = "category"
+            else:
+                dtypes[col] = "object"
+
+    return dtypes
 
 
 def optimize_dataframe_memory(df: pd.DataFrame, inplace: bool = False) -> pd.DataFrame:

@@ -10,7 +10,7 @@ Pydantic модели для конфигурации pipeline
 """
 
 from typing import Dict, List, Any, Optional, Union, Literal
-from pydantic import BaseModel, Field, validator, root_validator
+from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
 from enum import Enum
 from datetime import datetime, timedelta
 import re
@@ -86,11 +86,12 @@ class RetryPolicy(BaseModel):
         RetryPolicyType.EXPONENTIAL_BACKOFF, description="Тип политики"
     )
 
-    @validator("max_interval_seconds")
-    def max_interval_must_be_greater_than_initial(cls, v, values):
+    @field_validator("max_interval_seconds")
+    @classmethod
+    def max_interval_must_be_greater_than_initial(cls, v, info):
         if (
-            "initial_interval_seconds" in values
-            and v < values["initial_interval_seconds"]
+            hasattr(info, 'data') and "initial_interval_seconds" in info.data
+            and v < info.data["initial_interval_seconds"]
         ):
             raise ValueError("max_interval_seconds must be >= initial_interval_seconds")
         return v
@@ -128,7 +129,7 @@ class StageConfig(BaseModel):
     name: str = Field(..., min_length=1, description="Уникальное имя этапа")
     component: str = Field(
         ...,
-        regex=r"^(extractor|transformer|loader|validator|stage)/[\w-]+$",
+        pattern=r"^(extractor|transformer|loader|validator|stage)/[\w-]+$",
         description="Компонент в формате 'type/name'",
     )
     config: Dict[str, Any] = Field(
@@ -174,7 +175,8 @@ class StageConfig(BaseModel):
         """Имя компонента"""
         return self.component.split("/")[1]
 
-    @validator("component")
+    @field_validator("component")
+    @classmethod
     def validate_component_format(cls, v):
         """Валидация формата компонента"""
         parts = v.split("/")
@@ -226,65 +228,24 @@ class NotificationConfig(BaseModel):
     enabled: bool = Field(False, description="Включить уведомления")
     on_success: bool = Field(False, description="Уведомления при успехе")
     on_failure: bool = Field(True, description="Уведомления при ошибке")
-    on_retry: bool = Field(False, description="Уведомления при повторе")
+    on_retry: bool = Field(False, description="Уведомления при повторной попытке")
 
     # Channels
-    email: Optional[List[str]] = Field(None, description="Email адреса")
+    email: List[str] = Field(default_factory=list, description="Email адреса")
     slack_webhook: Optional[str] = Field(None, description="Slack webhook URL")
     teams_webhook: Optional[str] = Field(None, description="Teams webhook URL")
 
-
-class MonitoringConfig(BaseModel):
-    """Конфигурация мониторинга"""
-
-    enabled: bool = Field(True, description="Включить мониторинг")
-
-    # Metrics
-    prometheus_enabled: bool = Field(True, description="Prometheus метрики")
-    prometheus_port: int = Field(
-        8000, ge=1024, le=65535, description="Порт для Prometheus"
-    )
-
-    # Logging
-    log_level: LogLevel = Field(LogLevel.INFO, description="Уровень логирования")
-    structured_logging: bool = Field(True, description="Структурированное логирование")
-    log_to_file: bool = Field(False, description="Логировать в файл")
-    log_file_path: Optional[str] = Field(None, description="Путь к файлу логов")
-
-    # Health checks
-    health_check_enabled: bool = Field(True, description="Health check endpoint")
-    health_check_port: int = Field(
-        8001, ge=1024, le=65535, description="Порт для health check"
-    )
+    # Templates
+    success_template: Optional[str] = Field(None, description="Шаблон для успеха")
+    failure_template: Optional[str] = Field(None, description="Шаблон для ошибки")
 
 
-class TemporalConfig(BaseModel):
-    """Конфигурация Temporal"""
+class EncryptionConfig(BaseModel):
+    """Конфигурация шифрования"""
 
-    enabled: bool = Field(False, description="Использовать Temporal для оркестрации")
-
-    # Connection
-    server_address: str = Field("localhost:7233", description="Адрес Temporal сервера")
-    namespace: str = Field("default", description="Temporal namespace")
-
-    # Workflow settings
-    task_queue: str = Field("pipeline-tasks", description="Task queue для pipeline")
-    workflow_id_prefix: str = Field("pipeline", description="Префикс для Workflow ID")
-
-    # Timeouts
-    workflow_execution_timeout: Optional[int] = Field(
-        None, ge=1, description="Timeout для workflow"
-    )
-    workflow_run_timeout: Optional[int] = Field(
-        None, ge=1, description="Run timeout для workflow"
-    )
-    workflow_task_timeout: Optional[int] = Field(
-        None, ge=1, description="Task timeout для workflow"
-    )
-
-    # Security
-    tls_enabled: bool = Field(False, description="Использовать TLS")
-    cert_path: Optional[str] = Field(None, description="Путь к сертификату")
+    enabled: bool = Field(False, description="Включить шифрование")
+    algorithm: str = Field("AES-256-GCM", description="Алгоритм шифрования")
+    key_source: str = Field("env", description="Источник ключа (env, file, vault)")
     key_path: Optional[str] = Field(None, description="Путь к ключу")
 
 
@@ -310,7 +271,8 @@ class PipelineMetadata(BaseModel):
     documentation_url: Optional[str] = Field(None, description="Ссылка на документацию")
     repository_url: Optional[str] = Field(None, description="Ссылка на репозиторий")
 
-    @validator("schedule")
+    @field_validator("schedule")
+    @classmethod
     def validate_cron_schedule(cls, v):
         """Валидация cron расписания"""
         if v is not None:
@@ -326,9 +288,9 @@ class PipelineConfig(BaseModel):
 
     # Basic info
     name: str = Field(
-        ..., min_length=1, regex=r"^[a-zA-Z0-9-_]+$", description="Имя pipeline"
+        ..., min_length=1, pattern=r"^[a-zA-Z0-9-_]+$", description="Имя pipeline"
     )
-    version: str = Field("1.0.0", regex=r"^\d+\.\d+\.\d+", description="Версия")
+    version: str = Field("1.0.0", pattern=r"^\d+\.\d+\.\d+", description="Версия")
 
     # Metadata
     metadata: PipelineMetadata = Field(
@@ -336,7 +298,7 @@ class PipelineConfig(BaseModel):
     )
 
     # Pipeline structure
-    stages: List[StageConfig] = Field(..., min_items=1, description="Этапы pipeline")
+    stages: List[StageConfig] = Field(..., min_length=1, description="Этапы pipeline")
     quality_checks: List[QualityCheck] = Field(
         default_factory=list, description="Проверки качества"
     )
@@ -351,130 +313,34 @@ class PipelineConfig(BaseModel):
         False, description="Продолжить выполнение при ошибке"
     )
     max_parallel_stages: int = Field(
-        10, ge=1, description="Максимум параллельных этапов"
+        4, ge=1, le=16, description="Максимум параллельных этапов"
     )
-    default_timeout_seconds: int = Field(3600, ge=1, description="Timeout по умолчанию")
 
-    # Integration settings
-    temporal: TemporalConfig = Field(
-        default_factory=TemporalConfig, description="Настройки Temporal"
-    )
-    monitoring: MonitoringConfig = Field(
-        default_factory=MonitoringConfig, description="Настройки мониторинга"
-    )
+    # Monitoring and notifications
     notifications: NotificationConfig = Field(
         default_factory=NotificationConfig, description="Настройки уведомлений"
     )
 
-    @validator("stages")
-    def validate_stage_names_unique(cls, v):
-        """Проверка уникальности имен этапов"""
-        names = [stage.name for stage in v]
-        if len(names) != len(set(names)):
-            raise ValueError("Stage names must be unique")
-        return v
+    # Security
+    encryption: EncryptionConfig = Field(
+        default_factory=EncryptionConfig, description="Настройки шифрования"
+    )
 
-    @root_validator
-    def validate_stage_dependencies(cls, values):
-        """Валидация зависимостей между этапами"""
-        stages = values.get("stages", [])
-        if not stages:
-            return values
-
-        stage_names = {stage.name for stage in stages}
-
-        for stage in stages:
-            for dep in stage.depends_on:
-                if dep not in stage_names:
-                    raise ValueError(
-                        f"Stage '{stage.name}' depends on unknown stage '{dep}'"
-                    )
-
-        # Проверка на циклические зависимости
-        if cls._has_circular_dependencies(stages):
-            raise ValueError("Circular dependencies detected in stages")
-
-        return values
-
-    @staticmethod
-    def _has_circular_dependencies(stages: List[StageConfig]) -> bool:
-        """Проверка на циклические зависимости"""
-        # Строим граф зависимостей
-        deps = {stage.name: set(stage.depends_on) for stage in stages}
-
-        # DFS для поиска циклов
-        def has_cycle(node, path, visited):
-            if node in path:
-                return True
-            if node in visited:
-                return False
-
-            path.add(node)
-            for neighbor in deps.get(node, []):
-                if has_cycle(neighbor, path, visited):
-                    return True
-            path.remove(node)
-            visited.add(node)
-            return False
-
-        visited = set()
-        for stage in stages:
-            if stage.name not in visited:
-                if has_cycle(stage.name, set(), visited):
-                    return True
-
-        return False
-
-    def get_execution_order(self) -> List[List[str]]:
-        """Получение порядка выполнения этапов (топологическая сортировка)"""
-        stages_dict = {stage.name: stage for stage in self.stages if stage.enabled}
-        visited = set()
-        execution_order = []
-
-        while len(visited) < len(stages_dict):
-            # Находим этапы без невыполненных зависимостей
-            ready_stages = []
-            for stage_name, stage in stages_dict.items():
-                if stage_name not in visited:
-                    deps_satisfied = all(dep in visited for dep in stage.depends_on)
-                    if deps_satisfied:
-                        ready_stages.append(stage_name)
-
-            if not ready_stages:
-                remaining = set(stages_dict.keys()) - visited
-                raise ValueError(f"Cannot resolve dependencies for stages: {remaining}")
-
-            execution_order.append(ready_stages)
-            visited.update(ready_stages)
-
-        return execution_order
-
-    def validate_components_exist(self, registry) -> List[str]:
-        """Валидация существования компонентов в реестре"""
-        errors = []
-
-        for stage in self.stages:
-            component = registry.get_component(
-                stage.component_type, stage.component_name
-            )
-            if not component:
-                errors.append(f"Component not found: {stage.component}")
-
-        for check in self.quality_checks:
-            component = registry.get_component(
-                check.component_type, check.component_name
-            )
-            if not component:
-                errors.append(f"Quality check component not found: {check.component}")
-
-        return errors
+    # Advanced
+    allow_dynamic_config: bool = Field(
+        False, description="Разрешить динамическую конфигурацию"
+    )
+    validate_data_schema: bool = Field(
+        True, description="Валидировать схему данных между этапами"
+    )
 
     def substitute_environment_variables(self):
-        """Подстановка переменных окружения"""
+        """Подстановка переменных окружения в конфигурацию"""
 
         def substitute_value(value):
             if isinstance(value, str):
-                # Паттерн для ${VAR_NAME} или ${VAR_NAME:default_value}
+                # Поддержка различных форматов переменных
+                # ${VAR}, ${VAR:default}, $VAR
                 pattern = r"\$\{([^}:]+)(?::([^}]*))?\}"
 
                 def replace_var(match):
@@ -529,5 +395,37 @@ class FullPipelineConfig(BaseModel):
     pipeline: PipelineConfig
     runtime: Optional[RuntimeConfig] = None
 
-    class Config:
-        extra = "allow"
+    model_config = ConfigDict(
+        extra="allow",
+        validate_assignment=True,
+        use_enum_values=True,
+    )
+
+class TemporalConfig(BaseModel):
+    """Конфигурация Temporal"""
+
+    enabled: bool = Field(False, description="Использовать Temporal для оркестрации")
+
+    # Connection
+    server_address: str = Field("localhost:7233", description="Адрес Temporal сервера")
+    namespace: str = Field("default", description="Temporal namespace")
+
+    # Workflow settings
+    task_queue: str = Field("pipeline-tasks", description="Task queue для pipeline")
+    workflow_id_prefix: str = Field("pipeline", description="Префикс для Workflow ID")
+
+    # Timeouts
+    workflow_execution_timeout: Optional[int] = Field(
+        None, ge=1, description="Timeout для workflow"
+    )
+    workflow_run_timeout: Optional[int] = Field(
+        None, ge=1, description="Run timeout для workflow"
+    )
+    workflow_task_timeout: Optional[int] = Field(
+        None, ge=1, description="Task timeout для workflow"
+    )
+
+    # Security
+    tls_enabled: bool = Field(False, description="Использовать TLS")
+    cert_path: Optional[str] = Field(None, description="Путь к сертификату")
+    key_path: Optional[str] = Field(None, description="Путь к ключу")

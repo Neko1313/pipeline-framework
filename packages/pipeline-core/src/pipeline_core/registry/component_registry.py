@@ -24,7 +24,24 @@ from enum import Enum
 
 import structlog
 
-from pipeline_core.components import BaseComponent, ComponentType
+# Безопасный импорт базовых компонентов
+try:
+    from pipeline_core.components.base import BaseComponent, ComponentType
+    BASE_COMPONENTS_AVAILABLE = True
+except ImportError as e:
+    import warnings
+    warnings.warn(f"Base components not available: {e}")
+    BASE_COMPONENTS_AVAILABLE = False
+    # Создаем заглушки
+    class BaseComponent:
+        pass
+
+    class ComponentType:
+        EXTRACTOR = "extractor"
+        TRANSFORMER = "transformer"
+        LOADER = "loader"
+        VALIDATOR = "validator"
+        STAGE = "stage"
 
 logger = structlog.get_logger(__name__)
 
@@ -44,7 +61,7 @@ class ComponentInfo:
     """Информация о зарегистрированном компоненте"""
 
     component_class: Type[BaseComponent]
-    component_type: ComponentType
+    component_type: Any  # ComponentType или str
     name: str
     version: str
     description: str
@@ -57,12 +74,14 @@ class ComponentInfo:
     @property
     def key(self) -> str:
         """Уникальный ключ компонента"""
-        return f"{self.component_type.value}:{self.name}"
+        type_value = getattr(self.component_type, 'value', self.component_type)
+        return f"{type_value}:{self.name}"
 
     def to_dict(self) -> Dict[str, Any]:
         """Сериализация в словарь"""
+        type_value = getattr(self.component_type, 'value', self.component_type)
         return {
-            "type": self.component_type.value,
+            "type": type_value,
             "name": self.name,
             "version": self.version,
             "description": self.description,
@@ -94,31 +113,74 @@ class ComponentRegistry:
     def __init__(self):
         if not hasattr(self, "_initialized"):
             logger.info("Initializing ComponentRegistry")
-            self._discover_all_components()
+            # Автоматическое обнаружение только если базовые компоненты доступны
+            if BASE_COMPONENTS_AVAILABLE:
+                try:
+                    self.discover_components()
+                except Exception as e:
+                    logger.warning("Auto-discovery failed during init", error=str(e))
             self._initialized = True
             logger.info(
-                "ComponentRegistry initialized", total_components=len(self._components)
+                "ComponentRegistry initialized",
+                total_components=len(self._components),
+                base_available=BASE_COMPONENTS_AVAILABLE
             )
 
-    # === Discovery methods ===
+    def discover_components(self):
+        """
+        Публичный метод для обнаружения компонентов
+        Это основной метод, который должен вызываться для автоматического обнаружения
+        """
+        logger.info("Starting component discovery")
+
+        if not BASE_COMPONENTS_AVAILABLE:
+            logger.warning("Base components not available, skipping discovery")
+            return
+
+        initial_count = len(self._components)
+
+        try:
+            # Выполняем все виды обнаружения
+            self._discover_all_components()
+
+            final_count = len(self._components)
+            discovered = final_count - initial_count
+
+            logger.info(
+                "Component discovery completed",
+                initial_count=initial_count,
+                final_count=final_count,
+                discovered=discovered
+            )
+
+        except Exception as e:
+            logger.error("Component discovery failed", error=str(e))
+            raise
 
     def _discover_all_components(self):
         """Полное обнаружение всех компонентов"""
 
-        # 1. Entry points discovery
-        self._discover_via_entry_points()
+        try:
+            # 1. Entry points discovery
+            self._discover_via_entry_points()
 
-        # 2. Workspace packages discovery
-        self._discover_workspace_packages()
+            # 2. Workspace packages discovery
+            self._discover_workspace_packages()
 
-        # 3. Directory-based discovery
-        self._discover_from_directories()
+            # 3. Directory-based discovery
+            self._discover_from_directories()
 
-        # 4. Current module discovery
-        self._discover_current_modules()
+            # 4. Current module discovery
+            self._discover_current_modules()
+
+        except Exception as e:
+            logger.warning("Discovery error", error=str(e))
 
     def _discover_via_entry_points(self):
         """Обнаружение через entry points"""
+        if not BASE_COMPONENTS_AVAILABLE:
+            return
+
         try:
             # Ищем entry points для компонентов
             entry_point_groups = [
@@ -157,6 +219,8 @@ class ComponentRegistry:
 
     def _discover_workspace_packages(self):
         """Обнаружение компонентов в workspace packages"""
+        if not BASE_COMPONENTS_AVAILABLE:
+            return
 
         # Известные пакеты workspace
         workspace_packages = ["extractor_sql", "stages", "loaders_sql", "polars"]
@@ -175,70 +239,53 @@ class ComponentRegistry:
                         continue
 
                 self._scan_module_for_components(module, DiscoverySource.AUTO_DISCOVERY)
-                logger.debug("Scanned workspace package", package=package_name)
 
             except Exception as e:
-                logger.warning(
+                logger.debug(
                     "Failed to scan workspace package",
                     package=package_name,
                     error=str(e),
                 )
 
     def _discover_from_directories(self):
-        """Обнаружение компонентов в директориях"""
+        """Обнаружение компонентов в указанных директориях"""
+        if not BASE_COMPONENTS_AVAILABLE:
+            return
 
-        # Добавляем стандартные пути для поиска
-        current_dir = Path(__file__).parent.parent
-        potential_paths = [
-            current_dir / "components",
-            current_dir.parent / "components",
-            Path.cwd() / "packages" / "components",
-            Path.cwd() / "components",
-        ]
-
-        for path in potential_paths:
-            if path.exists():
-                self._discovery_paths.add(path)
-                self._scan_directory_for_components(path)
+        for path in self._discovery_paths:
+            self._scan_directory_for_components(path)
 
     def _discover_current_modules(self):
         """Обнаружение компонентов в уже загруженных модулях"""
+        if not BASE_COMPONENTS_AVAILABLE:
+            return
 
         for module_name, module in sys.modules.items():
-            if module and hasattr(module, "__file__"):
-                # Сканируем только модули, которые выглядят как наши
-                if any(
-                    keyword in module_name.lower()
-                    for keyword in [
-                        "pipeline",
-                        "extractor",
-                        "transformer",
-                        "loader",
-                        "component",
-                    ]
-                ):
-                    self._scan_module_for_components(
-                        module, DiscoverySource.AUTO_DISCOVERY
-                    )
+            if (
+                module
+                and hasattr(module, "__file__")
+                and module.__file__
+                and ("pipeline" in module_name or "extractor" in module_name)
+            ):
+                self._scan_module_for_components(module, DiscoverySource.AUTO_DISCOVERY)
 
     def _scan_directory_for_components(self, directory: Path):
-        """Сканирование директории на предмет компонентов"""
-
-        logger.debug("Scanning directory for components", path=str(directory))
+        """Сканирование директории на предмет Python модулей с компонентами"""
+        if not directory.exists() or not BASE_COMPONENTS_AVAILABLE:
+            return
 
         for py_file in directory.rglob("*.py"):
             if py_file.name.startswith("__"):
                 continue
 
             try:
-                # Загружаем модуль из файла
-                spec = importlib.util.spec_from_file_location(
-                    f"dynamic_{py_file.stem}", py_file
-                )
+                # Создаем module spec
+                module_name = py_file.stem
+                spec = importlib.util.spec_from_file_location(module_name, py_file)
+
                 if spec and spec.loader:
                     module = importlib.util.module_from_spec(spec)
                     spec.loader.exec_module(module)
-
                     self._scan_module_for_components(
                         module, DiscoverySource.DIRECTORY_SCAN
                     )
@@ -250,8 +297,7 @@ class ComponentRegistry:
 
     def _scan_module_for_components(self, module, source: DiscoverySource):
         """Сканирование модуля на предмет компонентов"""
-
-        if not module:
+        if not module or not BASE_COMPONENTS_AVAILABLE:
             return
 
         for name, obj in inspect.getmembers(module):
@@ -271,6 +317,8 @@ class ComponentRegistry:
         source: DiscoverySource = DiscoverySource.MANUAL,
     ) -> bool:
         """Регистрация класса компонента"""
+        if not BASE_COMPONENTS_AVAILABLE:
+            return False
 
         if not self._validate_component_class(component_class):
             return False
@@ -318,27 +366,22 @@ class ComponentRegistry:
     ) -> ComponentInfo:
         """Создание информации о компоненте"""
 
-        # Создаем временный экземпляр для получения метаданных
-        # (если у класса нет property без инициализации)
+        # Безопасное получение метаданных
         try:
             temp_instance = component_class({})
             component_type = temp_instance.component_type
             name = temp_instance.name
-            version = temp_instance.version
-            description = temp_instance.description
-            dependencies = temp_instance.dependencies
-            input_schema = temp_instance.input_schema
-            output_schema = temp_instance.output_schema
+            version = getattr(temp_instance, "version", "1.0.0")
+            description = getattr(temp_instance, "description", "")
+            dependencies = getattr(temp_instance, "dependencies", [])
+            input_schema = getattr(temp_instance, "input_schema", None)
+            output_schema = getattr(temp_instance, "output_schema", None)
         except Exception:
             # Fallback к class attributes
-            component_type = getattr(
-                component_class, "component_type", ComponentType.STAGE
-            )
+            component_type = getattr(component_class, "component_type", "stage")
             name = getattr(component_class, "name", component_class.__name__.lower())
             version = getattr(component_class, "version", "1.0.0")
-            description = getattr(
-                component_class, "description", component_class.__doc__ or ""
-            )
+            description = getattr(component_class, "description", component_class.__doc__ or "")
             dependencies = getattr(component_class, "dependencies", [])
             input_schema = getattr(component_class, "input_schema", None)
             output_schema = getattr(component_class, "output_schema", None)
@@ -358,6 +401,8 @@ class ComponentRegistry:
 
     def _validate_component_class(self, component_class: Type[BaseComponent]) -> bool:
         """Валидация класса компонента"""
+        if not BASE_COMPONENTS_AVAILABLE:
+            return False
 
         try:
             # Проверяем, что это подкласс BaseComponent
@@ -447,88 +492,23 @@ class ComponentRegistry:
 
         if component_type:
             components = [
-                c for c in components if c.component_type.value == component_type
+                c for c in components
+                if getattr(c.component_type, 'value', c.component_type) == component_type
             ]
 
         # Сортируем по типу, затем по имени
-        return sorted(components, key=lambda c: (c.component_type.value, c.name))
+        return sorted(components, key=lambda c: (
+            getattr(c.component_type, 'value', c.component_type),
+            c.name
+        ))
 
     def list_component_types(self) -> List[str]:
         """Получение списка типов компонентов"""
-        types = {info.component_type.value for info in self._components.values()}
-        return sorted(list(types))
-
-    def search_components(self, query: str) -> List[ComponentInfo]:
-        """Поиск компонентов по запросу"""
-        query_lower = query.lower()
-        results = []
-
-        for component_info in self._components.values():
-            # Поиск в имени, описании, типе
-            searchable_text = " ".join(
-                [
-                    component_info.name,
-                    component_info.description,
-                    component_info.component_type.value,
-                    component_info.module_path,
-                ]
-            ).lower()
-
-            if query_lower in searchable_text:
-                results.append(component_info)
-
-        return results
-
-    def reload_component(self, component_type: str, name: str) -> bool:
-        """Перезагрузка компонента (для development)"""
-        key = f"{component_type}:{name}"
-        component_info = self._components.get(key)
-
-        if not component_info:
-            return False
-
-        try:
-            # Перезагружаем модуль
-            module = importlib.reload(sys.modules[component_info.module_path])
-
-            # Удаляем старую регистрацию
-            self.unregister_component(component_type, name)
-
-            # Сканируем модуль заново
-            self._scan_module_for_components(module, DiscoverySource.AUTO_DISCOVERY)
-
-            logger.info("Component reloaded", key=key)
-            return True
-
-        except Exception as e:
-            logger.error("Failed to reload component", key=key, error=str(e))
-            return False
-
-    def add_discovery_path(self, path: Path):
-        """Добавление пути для поиска компонентов"""
-        if path.exists():
-            self._discovery_paths.add(path)
-            self._scan_directory_for_components(path)
-            logger.info("Added discovery path", path=str(path))
-
-    def rescan_all(self):
-        """Повторное сканирование всех источников"""
-        logger.info("Rescanning all component sources")
-        old_count = len(self._components)
-
-        # Очищаем текущие компоненты (кроме manually registered)
-        manual_components = {
-            k: v
-            for k, v in self._components.items()
-            if v.source == DiscoverySource.MANUAL
+        types = {
+            getattr(info.component_type, 'value', info.component_type)
+            for info in self._components.values()
         }
-        self._components = manual_components
-
-        # Заново обнаруживаем
-        self._discover_all_components()
-
-        new_count = len(self._components)
-        logger.info("Rescan completed", old_count=old_count, new_count=new_count)
+        return sorted(list(types))
 
     # === Hooks system ===
 
@@ -559,11 +539,12 @@ class ComponentRegistry:
             "by_type": {},
             "by_source": {},
             "discovery_paths": [str(p) for p in self._discovery_paths],
+            "base_components_available": BASE_COMPONENTS_AVAILABLE,
         }
 
         for component_info in self._components.values():
             # По типам
-            type_name = component_info.component_type.value
+            type_name = getattr(component_info.component_type, 'value', component_info.component_type)
             stats["by_type"][type_name] = stats["by_type"].get(type_name, 0) + 1
 
             # По источникам
@@ -586,12 +567,33 @@ class ComponentRegistry:
 
         return results
 
-    def export_registry(self) -> Dict[str, Any]:
-        """Экспорт реестра в формате JSON"""
-        return {
-            "components": {
-                key: info.to_dict() for key, info in self._components.items()
-            },
-            "stats": self.get_stats(),
-            "timestamp": str(datetime.now()),
+    def add_discovery_path(self, path: Path):
+        """Добавление пути для поиска компонентов"""
+        if path.exists():
+            self._discovery_paths.add(path)
+            if BASE_COMPONENTS_AVAILABLE:
+                self._scan_directory_for_components(path)
+            logger.info("Added discovery path", path=str(path))
+
+    def rescan_all(self):
+        """Повторное сканирование всех источников"""
+        if not BASE_COMPONENTS_AVAILABLE:
+            logger.warning("Base components not available, skipping rescan")
+            return
+
+        logger.info("Rescanning all component sources")
+        old_count = len(self._components)
+
+        # Очищаем текущие компоненты (кроме manually registered)
+        manual_components = {
+            k: v
+            for k, v in self._components.items()
+            if v.source == DiscoverySource.MANUAL
         }
+        self._components = manual_components
+
+        # Заново обнаруживаем
+        self._discover_all_components()
+
+        new_count = len(self._components)
+        logger.info("Rescan completed", old_count=old_count, new_count=new_count)

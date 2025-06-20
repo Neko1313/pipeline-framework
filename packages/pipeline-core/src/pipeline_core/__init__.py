@@ -1,102 +1,178 @@
 """
 Pipeline Core - Модульный framework для data workflows с Temporal integration
-
-Основные компоненты:
-- BaseComponent: Базовый класс для всех компонентов
-- ComponentRegistry: Система регистрации и обнаружения компонентов
-- Pipeline: Orchestrator для выполнения workflows
-- TemporalClient: Интеграция с Temporal
 """
 
-from pipeline_core.components import (
-    BaseComponent,
-    BaseExtractor,
-    BaseTransformer,
-    BaseLoader,
-    BaseValidator,
-    ExecutionContext,
-    ExecutionResult,
-    ExecutionStatus,
-    ComponentType,
-    ExecutionMetadata,
-)
+# 1. Core components - импортируем первыми
+try:
+    from pipeline_core.components.base import (
+        BaseComponent,
+        BaseExtractor,
+        BaseTransformer,
+        BaseLoader,
+        BaseValidator,
+        BaseStage,
+        ExecutionContext,
+        ExecutionResult,
+        ExecutionStatus,
+        ComponentType,
+        ExecutionMetadata,
+        CheckpointStrategy,
+    )
+    CORE_AVAILABLE = True
+except ImportError as e:
+    import warnings
+    warnings.warn(f"Core components import failed: {e}")
+    CORE_AVAILABLE = False
 
-from pipeline_core.registry import ComponentRegistry
+# 2. Registry
+try:
+    from pipeline_core.registry.component_registry import ComponentRegistry
+    REGISTRY_AVAILABLE = True
+except ImportError as e:
+    import warnings
+    warnings.warn(f"Registry import failed: {e}")
+    REGISTRY_AVAILABLE = False
 
-from .pipeline.executor import Pipeline, PipelineBuilder
+# 3. Config
+try:
+    from pipeline_core.config import (
+        PipelineConfig,
+        StageConfig,
+        RetryPolicy,
+        PipelineMetadata,
+        TemporalConfig,
+        RuntimeConfig,
+        ComponentSettings,
+    )
+    CONFIG_AVAILABLE = True
+except ImportError as e:
+    import warnings
+    warnings.warn(f"Config import failed: {e}")
+    CONFIG_AVAILABLE = False
 
-from pipeline_core.config import (
-    PipelineConfig,
-    StageConfig,
-    RetryPolicy,
-    PipelineMetadata,
-    YAMLConfigLoader,
-)
+# 4. YAML Loader
+try:
+    from pipeline_core.config import YAMLConfigLoader
+    YAML_LOADER_AVAILABLE = True
+except ImportError as e:
+    import warnings
+    warnings.warn(f"YAML loader import failed: {e}")
+    YAML_LOADER_AVAILABLE = False
 
-from pipeline_core.temporal import TemporalClient
-from pipeline_core.temporal import ComponentActivity
-from pipeline_core.temporal import DataPipelineWorkflow
+# 5. Pipeline executor
+try:
+    from pipeline_core.pipeline.executor import Pipeline, PipelineBuilder
+    PIPELINE_AVAILABLE = True
+except ImportError as e:
+    import warnings
+    warnings.warn(f"Pipeline executor import failed: {e}")
+    PIPELINE_AVAILABLE = False
 
-from pipeline_core.observability import setup_logging, get_logger
-from pipeline_core.observability import MetricsCollector
+# 6. Temporal integration
+try:
+    from pipeline_core.temporal.client import TemporalClient
+    from pipeline_core.temporal.activities import ComponentActivity
+    from pipeline_core.temporal.workflow import DataPipelineWorkflow
+    TEMPORAL_AVAILABLE = True
+except ImportError as e:
+    import warnings
+    warnings.warn(f"Temporal integration import failed: {e}")
+    TEMPORAL_AVAILABLE = False
+
+# 7. Observability
+try:
+    from pipeline_core.observability.logging import setup_logging, get_logger
+    from pipeline_core.observability.metrics import MetricsCollector
+    OBSERVABILITY_AVAILABLE = True
+except ImportError as e:
+    import warnings
+    warnings.warn(f"Observability import failed: {e}")
+    OBSERVABILITY_AVAILABLE = False
 
 # Version
 __version__ = "0.1.0"
 
-# Public API
-__all__ = [
-    # Core components
-    "BaseComponent",
-    "BaseExtractor",
-    "BaseTransformer",
-    "BaseLoader",
-    "BaseValidator",
-    # Execution context and results
-    "ExecutionContext",
-    "ExecutionResult",
-    "ExecutionStatus",
-    "ComponentType",
-    "ExecutionMetadata",
-    # Registry
-    "ComponentRegistry",
-    # Pipeline orchestration
-    "Pipeline",
-    "PipelineBuilder",
-    # Configuration
-    "PipelineConfig",
-    "StageConfig",
-    "RetryPolicy",
-    "PipelineMetadata",
-    "YAMLConfigLoader",
-    # Temporal integration
-    "TemporalClient",
-    "ComponentActivity",
-    "DataPipelineWorkflow",
-    # Observability
-    "setup_logging",
-    "get_logger",
-    "MetricsCollector",
-    # Version
-    "__version__",
-]
+# Динамическое формирование __all__
+__all__ = ["__version__"]
 
+if CORE_AVAILABLE:
+    __all__.extend([
+        "BaseComponent", "BaseExtractor", "BaseTransformer",
+        "BaseLoader", "BaseValidator", "BaseStage",
+        "ExecutionContext", "ExecutionResult", "ExecutionStatus",
+        "ComponentType", "ExecutionMetadata", "CheckpointStrategy",
+    ])
+
+if REGISTRY_AVAILABLE:
+    __all__.append("ComponentRegistry")
+
+if CONFIG_AVAILABLE:
+    __all__.extend([
+        "PipelineConfig", "StageConfig", "RetryPolicy",
+        "PipelineMetadata", "TemporalConfig", "RuntimeConfig",
+        "ComponentSettings",
+    ])
+
+if YAML_LOADER_AVAILABLE:
+    __all__.append("YAMLConfigLoader")
+
+if PIPELINE_AVAILABLE:
+    __all__.extend(["Pipeline", "PipelineBuilder"])
+
+if TEMPORAL_AVAILABLE:
+    __all__.extend(["TemporalClient", "ComponentActivity", "DataPipelineWorkflow"])
+
+if OBSERVABILITY_AVAILABLE:
+    __all__.extend(["setup_logging", "get_logger", "MetricsCollector"])
+
+def get_available_features() -> list[str]:
+    """Получение списка доступных функций framework'а"""
+    features = []
+    if CORE_AVAILABLE:
+        features.append("core")
+    if REGISTRY_AVAILABLE:
+        features.append("registry")
+    if CONFIG_AVAILABLE:
+        features.append("config")
+    if YAML_LOADER_AVAILABLE:
+        features.append("yaml_loader")
+    if PIPELINE_AVAILABLE:
+        features.append("pipeline")
+    if TEMPORAL_AVAILABLE:
+        features.append("temporal")
+    if OBSERVABILITY_AVAILABLE:
+        features.append("observability")
+    return features
 
 def main() -> None:
     """Entry point для CLI"""
-    from .cli.main import app
+    try:
+        from pipeline_core.cli.main import app
+        app()
+    except ImportError:
+        print("CLI module не найден")
 
-    app()
+__all__.extend(["get_available_features", "main"])
 
-
-# Автоматическая инициализация при импорте
+# Безопасная автоинициализация
 def _auto_initialize():
     """Автоматическая инициализация framework'а"""
-    # Настройка логирования по умолчанию
-    setup_logging()
+    try:
+        if OBSERVABILITY_AVAILABLE and setup_logging:
+            setup_logging()
 
-    # Инициализация реестра компонентов
-    ComponentRegistry()
+        if REGISTRY_AVAILABLE and ComponentRegistry:
+            registry = ComponentRegistry()
+            try:
+                if hasattr(registry, 'discover_components'):
+                    registry.discover_components()
+            except Exception as e:
+                import warnings
+                warnings.warn(f"Component discovery failed: {e}")
+    except Exception as e:
+        import warnings
+        warnings.warn(f"Auto-initialization failed: {e}")
 
-
-# Выполняем автоинициализацию
-_auto_initialize()
+# Выполняем автоинициализацию только если есть базовые компоненты
+if CORE_AVAILABLE or REGISTRY_AVAILABLE:
+    _auto_initialize()

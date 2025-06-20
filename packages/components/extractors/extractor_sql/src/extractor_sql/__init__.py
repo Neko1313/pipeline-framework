@@ -8,7 +8,7 @@ SQL Extractor Package for Pipeline Framework
 
 Основные компоненты:
 - SQLExtractor: Базовый SQL extractor
-- PostgreSQLExtractor: Специализированный PostgreSQL extractor
+- PostgresSQLExtractor: Специализированный PostgreSQL extractor
 - MySQLExtractor: Специализированный MySQL extractor
 - SQLiteExtractor: Специализированный SQLite extractor
 
@@ -38,7 +38,7 @@ from extractor_sql.components import (
     # Type aliases
     DataFormat,
     MySQLExtractor,
-    PostgreSQLExtractor,
+    PostgresSQLExtractor,
     QueryConfig,
     RetryConfig,
     # Main extractor classes
@@ -120,7 +120,7 @@ DEFAULT_RETRY_CONFIG = RetryConfig(
 # Registry of extractors by dialect
 EXTRACTOR_REGISTRY = {
     "sql": SQLExtractor,
-    "postgresql": PostgreSQLExtractor,
+    "postgresql": PostgresSQLExtractor,
     "mysql": MySQLExtractor,
     "sqlite": SQLiteExtractor,
 }
@@ -199,7 +199,7 @@ def create_extractor(
 __all__ = [
     # Main classes
     "SQLExtractor",
-    "PostgreSQLExtractor",
+    "PostgresSQLExtractor",
     "MySQLExtractor",
     "SQLiteExtractor",
     # Configuration
