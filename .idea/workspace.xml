@@ -5,31 +5,9 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="d90b37a7-db67-4f24-90c0-c200d35a3ed1" name="Список изменений" comment="fix">
-      <change afterPath="$PROJECT_DIR$/.github/workflows/ci.yml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/Makefile" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/examples/pipelines/customer-analytics-pipeline.yaml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/packages/components/loaders/loaders_sql/src/loaders_sql/components.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/packages/components/transformers/transformer-pandas/src/transformer_pandas/components.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/pipeline-framework.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/pipeline-framework.iml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/extractors/extractor_sql/src/extractor_sql/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/packages/components/extractors/extractor_sql/src/extractor_sql/__init__.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/extractors/extractor_sql/src/extractor_sql/components.py" beforeDir="false" afterPath="$PROJECT_DIR$/packages/components/extractors/extractor_sql/src/extractor_sql/components.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/extractors/extractor_sql/src/extractor_sql/exceptions.py" beforeDir="false" afterPath="$PROJECT_DIR$/packages/components/extractors/extractor_sql/src/extractor_sql/exceptions.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/extractors/extractor_sql/src/extractor_sql/utils.py" beforeDir="false" afterPath="$PROJECT_DIR$/packages/components/extractors/extractor_sql/src/extractor_sql/utils.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/extractors/extractor_sql/tests/conftest.py" beforeDir="false" afterPath="$PROJECT_DIR$/packages/components/extractors/extractor_sql/tests/conftest.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Makefile" beforeDir="false" afterPath="$PROJECT_DIR$/Makefile" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/packages/components/extractors/extractor_sql/tests/test_components.py" beforeDir="false" afterPath="$PROJECT_DIR$/packages/components/extractors/extractor_sql/tests/test_components.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/__init__.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/cli/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/cli/main.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/components/base.py" beforeDir="false" afterPath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/components/base.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/config/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/config/__init__.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/config/models.py" beforeDir="false" afterPath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/config/models.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/config/settings.py" beforeDir="false" afterPath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/config/settings.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/config/yaml_loader.py" beforeDir="false" afterPath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/config/yaml_loader.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/registry/component_registry.py" beforeDir="false" afterPath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/registry/component_registry.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/temporal/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/temporal/__init__.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/pyproject.toml" beforeDir="false" afterPath="$PROJECT_DIR$/pyproject.toml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/uv.lock" beforeDir="false" afterPath="$PROJECT_DIR$/uv.lock" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -108,7 +86,7 @@
       <workItem from="1750204391509" duration="11000" />
       <workItem from="1750225811857" duration="2242000" />
       <workItem from="1750389532203" duration="13655000" />
-      <workItem from="1750556988489" duration="3053000" />
+      <workItem from="1750556988489" duration="4845000" />
     </task>
     <task id="LOCAL-00001" summary="fix">
       <option name="closed" value="true" />
@@ -142,7 +120,15 @@
       <option name="project" value="LOCAL" />
       <updated>1750461115191</updated>
     </task>
-    <option name="localTasksCounter" value="5" />
+    <task id="LOCAL-00005" summary="fix">
+      <option name="closed" value="true" />
+      <created>1750560083060</created>
+      <option name="number" value="00005" />
+      <option name="presentableId" value="LOCAL-00005" />
+      <option name="project" value="LOCAL" />
+      <updated>1750560083060</updated>
+    </task>
+    <option name="localTasksCounter" value="6" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">

@@ -1,0 +1,17 @@
+[project]
+name = "transformer-pandas"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Ryibalchenko.NV", email = "Ryibalchenko.NV@dns-shop.ru" }
+]
+requires-python = ">=3.13"
+dependencies = []
+
+[project.scripts]
+transformer-pandas = "transformer_pandas:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

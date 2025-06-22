@@ -71,7 +71,7 @@ pre-commit: ## Run pre-commit hooks
 # Testing
 test: ## Run all tests
 	@echo "🧪 Running all tests..."
-	uv run pytest -x
+	uv run pytest
 
 test-unit: ## Run unit tests only
 	@echo "🧪 Running unit tests..."

@@ -1,5 +1,3 @@
-# packages/components/extractors/extractor_sql/tests/test_components.py
-
 import asyncio
 
 import pandas as pd
