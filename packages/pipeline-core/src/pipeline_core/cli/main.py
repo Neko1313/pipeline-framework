@@ -1,719 +1,605 @@
-"""
-Command Line Interface для pipeline framework
+# packages/pipeline-core/src/pipeline_core/cli/main.py
 
-Предоставляет команды для:
-- Управления pipeline
-- Валидации конфигураций
-- Работы с компонентами
-- Temporal интеграции
-- Мониторинга
+"""
+CLI interface для pipeline framework
+
+Команды:
+- init: Создание нового pipeline проекта
+- validate: Валидация конфигурации
+- run: Запуск pipeline локально
+- deploy: Развертывание в Temporal
+- list: Список доступных компонентов
+- test: Тестирование компонентов
+- dev: Development сервер с hot reload
 """
 
-import sys
 import asyncio
+import sys
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List
 
 import typer
+from rich import print as rprint
 from rich.console import Console
 from rich.table import Table
+from rich.progress import track
 from rich.panel import Panel
-from rich.text import Text
-from rich.progress import Progress, SpinnerColumn, TextColumn
-from rich.tree import Tree
 from rich.syntax import Syntax
-import yaml
+import structlog
 
-from pipeline_core.config.yaml_loader import load_pipeline_config, validate_config_file
-from pipeline_core.config.models import RuntimeConfig
-from pipeline_core.pipeline.executor import PipelineBuilder
-from pipeline_core.registry.component_registry import ComponentRegistry
-from pipeline_core.temporal.client import TemporalClient, create_temporal_client
-from pipeline_core.observability import (
-    setup_logging,
-    configure_for_development,
-    start_metrics_server,
-)
+# Проверяем доступность компонентов
+try:
+    from pipeline_core.config import YAMLConfigLoader, load_pipeline_config
+    from pipeline_core.registry import ComponentRegistry
+    from pipeline_core import get_available_features
 
+    CONFIG_AVAILABLE = True
+except ImportError:
+    CONFIG_AVAILABLE = False
+
+try:
+    from pipeline_core.pipeline.executor import Pipeline
+
+    PIPELINE_AVAILABLE = True
+except ImportError:
+    PIPELINE_AVAILABLE = False
+
+try:
+    from pipeline_core.temporal import TemporalClient, create_temporal_client
+
+    TEMPORAL_AVAILABLE = True
+except ImportError:
+    TEMPORAL_AVAILABLE = False
+
+# Настройка CLI
 app = typer.Typer(
-    name="pipeline",
-    help="Pipeline Framework CLI - управление data workflows",
+    name="pipeline-framework",
+    help="Data Pipeline Framework CLI",
     add_completion=False,
 )
 
-# Создаем подкоманды
-config_app = typer.Typer(name="config", help="Команды для работы с конфигурацией")
-component_app = typer.Typer(name="component", help="Команды для работы с компонентами")
-temporal_app = typer.Typer(name="temporal", help="Команды для работы с Temporal")
-metrics_app = typer.Typer(name="metrics", help="Команды для работы с метриками")
-
-app.add_typer(config_app)
-app.add_typer(component_app)
-app.add_typer(temporal_app)
-app.add_typer(metrics_app)
-
-# Console для rich output
 console = Console()
-
-
-# === Основные команды ===
-
-
-@app.command()
-def run(
-    config_path: str = typer.Argument(..., help="Путь к конфигурации pipeline"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Режим сухого запуска"),
-    environment: str = typer.Option(
-        "development", "--env", help="Окружение выполнения"
-    ),
-    resume_from: Optional[str] = typer.Option(
-        None, "--resume-from", help="Возобновить с этапа"
-    ),
-    skip_stages: Optional[List[str]] = typer.Option(
-        None, "--skip", help="Пропустить этапы"
-    ),
-    use_temporal: bool = typer.Option(
-        False, "--temporal", help="Использовать Temporal для выполнения"
-    ),
-    temporal_server: str = typer.Option(
-        "localhost:7233", "--temporal-server", help="Адрес Temporal сервера"
-    ),
-    log_level: str = typer.Option("INFO", "--log-level", help="Уровень логирования"),
-    output_format: str = typer.Option(
-        "console", "--output", help="Формат вывода (console/json)"
-    ),
-):
-    """Запуск pipeline"""
-
-    # Настройка логирования
-    if environment == "development":
-        configure_for_development()
-    else:
-        setup_logging()
-
-    console.print(f"🚀 Запуск pipeline: [bold]{config_path}[/bold]")
-
-    try:
-        # Создаем runtime конфигурацию
-        runtime_config = RuntimeConfig(
-            run_id=f"cli_{int(typer.get_current_context().resilient_parsing)}",
-            dry_run=dry_run,
-            resume_from_stage=resume_from,
-            skip_stages=skip_stages or [],
-            triggered_by="cli",
-            environment_overrides={"ENVIRONMENT": environment},
-        )
-
-        if use_temporal:
-            # Запуск через Temporal
-            asyncio.run(
-                _run_pipeline_temporal(config_path, runtime_config, temporal_server)
-            )
-        else:
-            # Локальный запуск
-            asyncio.run(_run_pipeline_local(config_path, runtime_config))
-
-        console.print("✅ Pipeline выполнен успешно", style="green")
-
-    except Exception as e:
-        console.print(f"❌ Ошибка выполнения pipeline: {e}", style="red")
-        sys.exit(1)
-
-
-async def _run_pipeline_local(config_path: str, runtime_config: RuntimeConfig):
-    """Локальный запуск pipeline"""
-
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console,
-        transient=True,
-    ) as progress:
-        # Загрузка конфигурации
-        task = progress.add_task("Загрузка конфигурации...", total=None)
-        full_config = load_pipeline_config(config_path, runtime_config=runtime_config)
-        progress.update(task, description="✅ Конфигурация загружена")
-
-        # Создание и выполнение pipeline
-        progress.update(task, description="Создание pipeline...")
-        pipeline = PipelineBuilder.from_config(full_config.pipeline)
-
-        progress.update(task, description="Выполнение pipeline...")
-        result = await pipeline.execute(runtime_config)
-
-        progress.remove_task(task)
-
-    # Отображение результатов
-    _display_pipeline_result(result)
-
-
-async def _run_pipeline_temporal(
-    config_path: str, runtime_config: RuntimeConfig, server_address: str
-):
-    """Запуск через Temporal"""
-
-    from ..config.models import TemporalConfig
-
-    temporal_config = TemporalConfig(enabled=True, server_address=server_address)
-
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console,
-        transient=True,
-    ) as progress:
-        # Подключение к Temporal
-        task = progress.add_task("Подключение к Temporal...", total=None)
-        temporal_client = await create_temporal_client(temporal_config)
-
-        # Загрузка конфигурации
-        progress.update(task, description="Загрузка конфигурации...")
-        full_config = load_pipeline_config(config_path, runtime_config=runtime_config)
-
-        # Запуск workflow
-        progress.update(task, description="Запуск Temporal workflow...")
-        workflow_handle = await temporal_client.execute_pipeline(
-            full_config.pipeline, runtime_config
-        )
-
-        progress.update(
-            task, description=f"Ожидание завершения workflow {workflow_handle.id}..."
-        )
-        result = await temporal_client.wait_for_pipeline_completion(workflow_handle)
-
-        progress.remove_task(task)
-
-        await temporal_client.disconnect()
-
-    console.print(f"✅ Temporal workflow завершен: [bold]{workflow_handle.id}[/bold]")
-
-
-def _display_pipeline_result(result):
-    """Отображение результатов выполнения pipeline"""
-
-    # Основная информация
-    status_color = "green" if result.is_success() else "red"
-    status_icon = "✅" if result.is_success() else "❌"
-
-    console.print(
-        Panel(
-            f"{status_icon} Pipeline: [bold]{result.pipeline_id}[/bold]\n"
-            f"Run ID: {result.run_id}\n"
-            f"Status: [{status_color}]{result.status.value.upper()}[/{status_color}]\n"
-            f"Duration: {result.metrics.duration_seconds:.2f}s\n"
-            f"Stages: {result.metrics.completed_stages}/{result.metrics.total_stages}",
-            title="Pipeline Result",
-            border_style=status_color,
-        )
-    )
-
-    # Таблица результатов этапов
-    if result.stage_results:
-        table = Table(title="Stage Results")
-        table.add_column("Stage", style="cyan")
-        table.add_column("Status", style="magenta")
-        table.add_column("Duration", style="green")
-        table.add_column("Rows", style="blue")
-
-        for stage_name, stage_result in result.stage_results.items():
-            status_style = "green" if stage_result.is_success() else "red"
-            duration = (
-                f"{stage_result.metadata.duration_seconds:.2f}s"
-                if stage_result.metadata.duration_seconds
-                else "N/A"
-            )
-            rows = (
-                str(stage_result.metadata.rows_processed)
-                if stage_result.metadata.rows_processed
-                else "N/A"
-            )
-
-            table.add_row(
-                stage_name,
-                f"[{status_style}]{stage_result.status.value}[/{status_style}]",
-                duration,
-                rows,
-            )
-
-        console.print(table)
-
-
-# === Команды конфигурации ===
-
-
-@config_app.command("validate")
-def validate_config(
-    config_path: str = typer.Argument(..., help="Путь к конфигурации pipeline"),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Подробный вывод"),
-):
-    """Валидация конфигурации pipeline"""
-
-    console.print(f"🔍 Валидация конфигурации: [bold]{config_path}[/bold]")
-
-    try:
-        errors = validate_config_file(config_path)
-
-        if not errors:
-            console.print("✅ Конфигурация валидна", style="green")
-
-            if verbose:
-                # Показываем детали конфигурации
-                full_config = load_pipeline_config(config_path)
-                _display_config_details(full_config.pipeline)
-        else:
-            console.print("❌ Найдены ошибки в конфигурации:", style="red")
-            for error in errors:
-                console.print(f"  • {error}", style="red")
-            sys.exit(1)
-
-    except Exception as e:
-        console.print(f"❌ Ошибка при валидации: {e}", style="red")
-        sys.exit(1)
-
-
-@config_app.command("show")
-def show_config(
-    config_path: str = typer.Argument(..., help="Путь к конфигурации pipeline"),
-    format: str = typer.Option("yaml", "--format", help="Формат вывода (yaml/json)"),
-):
-    """Отображение конфигурации pipeline"""
-
-    try:
-        full_config = load_pipeline_config(config_path)
-        config_dict = full_config.pipeline.dict()
-
-        if format == "yaml":
-            syntax = Syntax(yaml.dump(config_dict, default_flow_style=False), "yaml")
-            console.print(syntax)
-        elif format == "json":
-            import json
-
-            syntax = Syntax(json.dumps(config_dict, indent=2), "json")
-            console.print(syntax)
-        else:
-            console.print(
-                "❌ Неподдерживаемый формат. Используйте 'yaml' или 'json'", style="red"
-            )
-            sys.exit(1)
-
-    except Exception as e:
-        console.print(f"❌ Ошибка загрузки конфигурации: {e}", style="red")
-        sys.exit(1)
-
-
-def _display_config_details(pipeline_config):
-    """Отображение деталей конфигурации"""
-
-    # Основная информация
-    console.print(
-        Panel(
-            f"Name: [bold]{pipeline_config.name}[/bold]\n"
-            f"Version: {pipeline_config.version}\n"
-            f"Environment: {pipeline_config.metadata.environment.value}\n"
-            f"Owner: {pipeline_config.metadata.owner or 'N/A'}\n"
-            f"Description: {pipeline_config.metadata.description or 'N/A'}",
-            title="Pipeline Information",
-        )
-    )
-
-    # Дерево этапов
-    if pipeline_config.stages:
-        tree = Tree("🔄 Pipeline Stages")
-
-        for stage in pipeline_config.stages:
-            stage_node = tree.add(f"[cyan]{stage.name}[/cyan] ({stage.component})")
-
-            if stage.depends_on:
-                deps_node = stage_node.add("📋 Dependencies")
-                for dep in stage.depends_on:
-                    deps_node.add(f"[yellow]{dep}[/yellow]")
-
-            if stage.retry_policy.maximum_attempts > 1:
-                stage_node.add(
-                    f"🔄 Retry: {stage.retry_policy.maximum_attempts} attempts"
-                )
-
-            if stage.timeout_seconds != 3600:
-                stage_node.add(f"⏱️ Timeout: {stage.timeout_seconds}s")
-
-        console.print(tree)
-
-
-# === Команды компонентов ===
-
-
-@component_app.command("list")
-def list_components(
-    component_type: Optional[str] = typer.Option(
-        None, "--type", help="Фильтр по типу компонента"
-    ),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Подробный вывод"),
-):
-    """Список зарегистрированных компонентов"""
-
-    registry = ComponentRegistry()
-    components = registry.list_components(component_type)
-
-    if not components:
-        console.print("❌ Компоненты не найдены", style="yellow")
-        return
-
-    table = Table(title=f"Registered Components ({len(components)})")
-    table.add_column("Type", style="cyan")
-    table.add_column("Name", style="magenta")
-    table.add_column("Version", style="green")
-    table.add_column("Source", style="blue")
-
-    if verbose:
-        table.add_column("Description", style="white")
-        table.add_column("Module", style="dim")
-
-    for component in components:
-        row = [
-            component.component_type.value,
-            component.name,
-            component.version,
-            component.source.value,
-        ]
-
-        if verbose:
-            row.extend(
-                [
-                    component.description[:50] + "..."
-                    if len(component.description) > 50
-                    else component.description,
-                    component.module_path,
-                ]
-            )
-
-        table.add_row(*row)
-
-    console.print(table)
-
-
-@component_app.command("info")
-def component_info(
-    component_type: str = typer.Argument(..., help="Тип компонента"),
-    component_name: str = typer.Argument(..., help="Имя компонента"),
-):
-    """Подробная информация о компоненте"""
-
-    registry = ComponentRegistry()
-    component_info = registry.get_component_info(component_type, component_name)
-
-    if not component_info:
-        console.print(
-            f"❌ Компонент {component_type}/{component_name} не найден", style="red"
-        )
-        sys.exit(1)
-
-    console.print(
-        Panel(
-            f"Type: [cyan]{component_info.component_type.value}[/cyan]\n"
-            f"Name: [bold]{component_info.name}[/bold]\n"
-            f"Version: [green]{component_info.version}[/green]\n"
-            f"Source: [blue]{component_info.source.value}[/blue]\n"
-            f"Module: [dim]{component_info.module_path}[/dim]\n\n"
-            f"Description:\n{component_info.description}",
-            title=f"Component: {component_type}/{component_name}",
-        )
-    )
-
-    # Зависимости
-    if component_info.dependencies:
-        deps_text = Text("Dependencies:\n")
-        for dep in component_info.dependencies:
-            deps_text.append(f"  • {dep}\n", style="yellow")
-        console.print(deps_text)
-
-
-@component_app.command("validate")
-def validate_components():
-    """Валидация всех зарегистрированных компонентов"""
-
-    registry = ComponentRegistry()
-
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console,
-    ) as progress:
-        task = progress.add_task("Валидация компонентов...", total=None)
-        validation_results = registry.validate_all_components()
-
-    # Отображение результатов
-    valid_count = len(validation_results["valid"])
-    invalid_count = len(validation_results["invalid"])
-
-    console.print(f"✅ Валидных компонентов: {valid_count}", style="green")
-
-    if invalid_count > 0:
-        console.print(f"❌ Невалидных компонентов: {invalid_count}", style="red")
-        for invalid in validation_results["invalid"]:
-            console.print(f"  • {invalid}", style="red")
-        sys.exit(1)
-
-
-# === Команды Temporal ===
-
-
-@temporal_app.command("worker")
-def start_temporal_worker(
-    server: str = typer.Option(
-        "localhost:7233", "--server", help="Адрес Temporal сервера"
-    ),
-    namespace: str = typer.Option("default", "--namespace", help="Temporal namespace"),
-    task_queue: str = typer.Option("pipeline-tasks", "--task-queue", help="Task queue"),
-    max_activities: int = typer.Option(
-        100, "--max-activities", help="Максимум concurrent activities"
-    ),
-    max_workflows: int = typer.Option(
-        100, "--max-workflows", help="Максимум concurrent workflows"
-    ),
-):
-    """Запуск Temporal Worker"""
-
-    console.print(f"🔄 Запуск Temporal Worker...")
-    console.print(f"Server: [bold]{server}[/bold]")
-    console.print(f"Namespace: [bold]{namespace}[/bold]")
-    console.print(f"Task Queue: [bold]{task_queue}[/bold]")
-
-    from ..config.models import TemporalConfig
-
-    temporal_config = TemporalConfig(
-        enabled=True, server_address=server, namespace=namespace, task_queue=task_queue
-    )
-
-    async def run_worker():
-        temporal_client = await create_temporal_client(temporal_config)
-        worker = await temporal_client.start_worker(
-            task_queue=task_queue,
-            max_concurrent_activities=max_activities,
-            max_concurrent_workflows=max_workflows,
-        )
-
-        console.print("✅ Temporal Worker запущен. Нажмите Ctrl+C для остановки.")
-
-        try:
-            # Держим worker работающим
-            while True:
-                await asyncio.sleep(1)
-        except KeyboardInterrupt:
-            console.print("🛑 Остановка Temporal Worker...")
-            await temporal_client.stop_all_workers()
-            await temporal_client.disconnect()
-
-    try:
-        asyncio.run(run_worker())
-    except KeyboardInterrupt:
-        console.print("✅ Temporal Worker остановлен")
-
-
-@temporal_app.command("status")
-def temporal_status(
-    workflow_id: str = typer.Argument(..., help="ID Workflow"),
-    server: str = typer.Option(
-        "localhost:7233", "--server", help="Адрес Temporal сервера"
-    ),
-    namespace: str = typer.Option("default", "--namespace", help="Temporal namespace"),
-):
-    """Статус Temporal Workflow"""
-
-    from ..config.models import TemporalConfig
-
-    temporal_config = TemporalConfig(
-        enabled=True, server_address=server, namespace=namespace
-    )
-
-    async def get_status():
-        temporal_client = await create_temporal_client(temporal_config)
-        status = await temporal_client.get_workflow_status(workflow_id)
-        await temporal_client.disconnect()
-        return status
-
-    try:
-        status = asyncio.run(get_status())
-
-        console.print(
-            Panel(
-                f"Workflow ID: [bold]{status['workflow_id']}[/bold]\n"
-                f"Run ID: {status['run_id']}\n"
-                f"Status: [cyan]{status['status']}[/cyan]\n"
-                f"Start Time: {status['start_time'] or 'N/A'}\n"
-                f"Close Time: {status['close_time'] or 'N/A'}\n"
-                f"Execution Time: {status['execution_time'] or 'N/A'}s\n"
-                f"Task Queue: {status['task_queue']}",
-                title="Temporal Workflow Status",
-            )
-        )
-
-    except Exception as e:
-        console.print(f"❌ Ошибка получения статуса: {e}", style="red")
-        sys.exit(1)
-
-
-# === Команды метрик ===
-
-
-@metrics_app.command("server")
-def start_metrics_server_cmd(
-    port: int = typer.Option(8000, "--port", help="Порт для сервера метрик"),
-    host: str = typer.Option("0.0.0.0", "--host", help="Хост для сервера метрик"),
-):
-    """Запуск сервера метрик"""
-
-    console.print(f"📊 Запуск сервера метрик на [bold]{host}:{port}[/bold]")
-
-    try:
-        server = start_metrics_server(port, host)
-        console.print(f"✅ Сервер метрик запущен: http://{host}:{port}/metrics")
-        console.print("Нажмите Ctrl+C для остановки")
-
-        # Держим сервер работающим
-        try:
-            while True:
-                import time
-
-                time.sleep(1)
-        except KeyboardInterrupt:
-            console.print("🛑 Остановка сервера метрик...")
-            server.stop()
-            console.print("✅ Сервер метрик остановлен")
-
-    except Exception as e:
-        console.print(f"❌ Ошибка запуска сервера метрик: {e}", style="red")
-        sys.exit(1)
-
-
-@metrics_app.command("export")
-def export_metrics():
-    """Экспорт текущих метрик"""
-
-    from ..observability.metrics import get_default_metrics_collector
-
-    collector = get_default_metrics_collector()
-    metrics_data = collector.export_metrics()
-
-    console.print("📊 Текущие метрики:")
-    console.print(metrics_data)
-
-
-# === Утилиты ===
+logger = structlog.get_logger(__name__)
 
 
 @app.command()
 def init(
-    name: str = typer.Argument(..., help="Имя нового pipeline"),
-    template: str = typer.Option(
-        "basic", "--template", help="Шаблон pipeline (basic/sql/etl)"
-    ),
-    output_dir: str = typer.Option(
-        ".", "--output", help="Директория для создания проекта"
-    ),
+    name: str = typer.Argument(..., help="Pipeline name"),
+    path: Optional[Path] = typer.Option(None, "--path", "-p", help="Project path"),
+    template: str = typer.Option("basic", "--template", "-t", help="Project template"),
+    force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing files"),
 ):
-    """Создание нового pipeline проекта"""
+    """Create a new pipeline project"""
 
-    console.print(f"🚀 Создание нового pipeline: [bold]{name}[/bold]")
+    if not CONFIG_AVAILABLE:
+        rprint("[red]Error:[/red] Configuration module not available")
+        raise typer.Exit(1)
 
-    project_dir = Path(output_dir) / name
-    project_dir.mkdir(exist_ok=True)
+    project_path = path or Path.cwd() / name
 
-    # Создаем базовую структуру
-    (project_dir / "config").mkdir(exist_ok=True)
-    (project_dir / "components").mkdir(exist_ok=True)
-    (project_dir / "scripts").mkdir(exist_ok=True)
+    if project_path.exists() and not force:
+        rprint(
+            f"[red]Error:[/red] Directory {project_path} already exists. Use --force to overwrite."
+        )
+        raise typer.Exit(1)
 
-    # Создаем базовую конфигурацию
-    basic_config = {
-        "pipeline": {
-            "name": name,
-            "version": "1.0.0",
-            "metadata": {
-                "description": f"Pipeline {name}",
-                "owner": "data-team@company.com",
-                "environment": "development",
-            },
-            "stages": [
-                {
-                    "name": "extract-data",
-                    "component": "extractor/sql",
-                    "config": {
-                        "connection_string": "${DATABASE_URL}",
-                        "query": "SELECT * FROM source_table",
-                    },
-                },
-                {
-                    "name": "transform-data",
-                    "component": "transformer/polars",
-                    "depends_on": ["extract-data"],
-                    "config": {
-                        "operations": [
-                            {"type": "filter", "condition": "column IS NOT NULL"}
-                        ]
-                    },
-                },
-                {
-                    "name": "load-data",
-                    "component": "loader/sql",
-                    "depends_on": ["transform-data"],
-                    "config": {
-                        "connection_string": "${WAREHOUSE_URL}",
-                        "table": "target_table",
-                        "write_mode": "append",
-                    },
-                },
-            ],
-        }
-    }
+    rprint(f"[blue]Creating pipeline project:[/blue] {name}")
+    rprint(f"[blue]Location:[/blue] {project_path}")
 
-    config_file = project_dir / "config" / "pipeline.yaml"
-    with open(config_file, "w") as f:
-        yaml.dump(basic_config, f, default_flow_style=False)
+    try:
+        _create_project_structure(project_path, name, template)
+        rprint(f"[green]✓[/green] Project created successfully!")
+        rprint(f"\n[yellow]Next steps:[/yellow]")
+        rprint(f"1. cd {project_path}")
+        rprint("2. Edit pipeline.yaml to configure your pipeline")
+        rprint("3. Run: pipeline validate pipeline.yaml")
+        rprint("4. Run: pipeline run pipeline.yaml")
 
-    # Создаем README
-    readme_content = f"""# {name} Pipeline
-
-## Описание
-Pipeline для обработки данных {name}.
-
-## Структура
-- `config/pipeline.yaml` - конфигурация pipeline
-- `components/` - кастомные компоненты
-- `scripts/` - вспомогательные скрипты
-
-## Запуск
-```bash
-pipeline run config/pipeline.yaml
-```
-
-## Валидация
-```bash
-pipeline config validate config/pipeline.yaml
-```
-"""
-
-    readme_file = project_dir / "README.md"
-    with open(readme_file, "w") as f:
-        f.write(readme_content)
-
-    console.print(f"✅ Проект создан в: [bold]{project_dir}[/bold]")
-    console.print("📁 Структура проекта:")
-    console.print(f"  📄 {config_file}")
-    console.print(f"  📄 {readme_file}")
-    console.print(f"  📁 {project_dir / 'components'}")
-    console.print(f"  📁 {project_dir / 'scripts'}")
+    except Exception as e:
+        rprint(f"[red]Error creating project:[/red] {e}")
+        raise typer.Exit(1)
 
 
 @app.command()
-def version():
-    """Версия pipeline framework"""
-    console.print("Pipeline Framework v0.1.0")
+def validate(
+    config_path: Path = typer.Argument(..., help="Path to pipeline configuration"),
+    environment: str = typer.Option("development", "--env", "-e", help="Environment"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+):
+    """Validate pipeline configuration"""
+
+    if not CONFIG_AVAILABLE:
+        rprint("[red]Error:[/red] Configuration module not available")
+        raise typer.Exit(1)
+
+    rprint(f"[blue]Validating configuration:[/blue] {config_path}")
+
+    try:
+        loader = YAMLConfigLoader(environment=environment)
+        result = loader.validate_config_file(config_path)
+
+        if result["valid"]:
+            rprint("[green]✓ Configuration is valid![/green]")
+
+            if verbose:
+                rprint(f"Pipeline name: {result['pipeline_name']}")
+                rprint(f"Stages count: {result['stages_count']}")
+
+            if result["warnings"]:
+                rprint("\n[yellow]Warnings:[/yellow]")
+                for warning in result["warnings"]:
+                    rprint(f"  - {warning}")
+        else:
+            rprint("[red]✗ Configuration is invalid![/red]")
+            rprint("\n[red]Errors:[/red]")
+            for error in result["errors"]:
+                rprint(f"  - {error}")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        rprint(f"[red]Validation failed:[/red] {e}")
+        raise typer.Exit(1)
 
 
-def main():
-    """Entry point для CLI"""
-    app()
+@app.command()
+def run(
+    config_path: Path = typer.Argument(..., help="Path to pipeline configuration"),
+    environment: str = typer.Option("development", "--env", "-e", help="Environment"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Validate without execution"),
+    stage: Optional[str] = typer.Option(
+        None, "--stage", help="Run specific stage only"
+    ),
+    parallel: bool = typer.Option(
+        False, "--parallel", help="Enable parallel execution"
+    ),
+):
+    """Run pipeline locally"""
+
+    if not PIPELINE_AVAILABLE:
+        rprint("[red]Error:[/red] Pipeline executor not available")
+        raise typer.Exit(1)
+
+    rprint(f"[blue]Running pipeline:[/blue] {config_path}")
+
+    try:
+        # Загружаем конфигурацию
+        config = load_pipeline_config(config_path, environment=environment)
+
+        if dry_run:
+            rprint("[yellow]Dry run mode - pipeline will not be executed[/yellow]")
+            _print_pipeline_summary(config)
+            return
+
+        # Создаем и запускаем pipeline
+        pipeline = Pipeline(config)
+
+        if stage:
+            rprint(f"[blue]Running single stage:[/blue] {stage}")
+            result = asyncio.run(pipeline.run_stage(stage))
+        else:
+            rprint("[blue]Running full pipeline...[/blue]")
+            result = asyncio.run(pipeline.run())
+
+        if result.success:
+            rprint("[green]✓ Pipeline completed successfully![/green]")
+            rprint(f"Duration: {result.duration:.2f}s")
+            rprint(f"Stages executed: {len(result.stage_results)}")
+        else:
+            rprint("[red]✗ Pipeline failed![/red]")
+            rprint(f"Error: {result.error}")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        rprint(f"[red]Pipeline execution failed:[/red] {e}")
+        raise typer.Exit(1)
+
+
+@app.command()
+def deploy(
+    config_path: Path = typer.Argument(..., help="Path to pipeline configuration"),
+    temporal_address: str = typer.Option(
+        "localhost:7233", "--temporal", help="Temporal server address"
+    ),
+    namespace: str = typer.Option("default", "--namespace", help="Temporal namespace"),
+    environment: str = typer.Option("production", "--env", "-e", help="Environment"),
+    schedule: Optional[str] = typer.Option(
+        None, "--schedule", help="Cron schedule override"
+    ),
+):
+    """Deploy pipeline to Temporal"""
+
+    if not TEMPORAL_AVAILABLE:
+        rprint("[red]Error:[/red] Temporal integration not available")
+        raise typer.Exit(1)
+
+    rprint(f"[blue]Deploying pipeline to Temporal:[/blue] {temporal_address}")
+
+    try:
+        # Загружаем конфигурацию
+        config = load_pipeline_config(config_path, environment=environment)
+
+        # Создаем Temporal client
+        temporal_client = create_temporal_client(
+            server_address=temporal_address, namespace=namespace
+        )
+
+        # Развертываем pipeline
+        asyncio.run(_deploy_to_temporal(temporal_client, config, schedule))
+
+        rprint("[green]✓ Pipeline deployed successfully![/green]")
+        rprint(f"Pipeline: {config.name}")
+        rprint(f"Namespace: {namespace}")
+        if schedule:
+            rprint(f"Schedule: {schedule}")
+
+    except Exception as e:
+        rprint(f"[red]Deployment failed:[/red] {e}")
+        raise typer.Exit(1)
+
+
+@app.command()
+def list_components(
+    component_type: Optional[str] = typer.Option(
+        None, "--type", "-t", help="Filter by component type"
+    ),
+    search: Optional[str] = typer.Option(
+        None, "--search", "-s", help="Search components"
+    ),
+    detailed: bool = typer.Option(
+        False, "--detailed", "-d", help="Show detailed information"
+    ),
+):
+    """List available pipeline components"""
+
+    try:
+        registry = ComponentRegistry()
+        components = registry.list_components()
+
+        # Фильтрация
+        if component_type:
+            components = [c for c in components if c.component_type == component_type]
+
+        if search:
+            search_lower = search.lower()
+            components = [
+                c
+                for c in components
+                if search_lower in c.name.lower()
+                or search_lower in c.description.lower()
+            ]
+
+        if not components:
+            rprint("[yellow]No components found matching criteria[/yellow]")
+            return
+
+        # Вывод таблицы
+        table = Table(title="Available Components")
+        table.add_column("Type", style="cyan")
+        table.add_column("Name", style="green")
+        table.add_column("Version", style="blue")
+        table.add_column("Description", style="white")
+
+        if detailed:
+            table.add_column("Source", style="dim")
+
+        for component in components:
+            row = [
+                component.component_type,
+                component.name,
+                component.version,
+                component.description[:50] + "..."
+                if len(component.description) > 50
+                else component.description,
+            ]
+
+            if detailed:
+                row.append(component.discovery_source)
+
+            table.add_row(*row)
+
+        console.print(table)
+
+    except Exception as e:
+        rprint(f"[red]Failed to list components:[/red] {e}")
+        raise typer.Exit(1)
+
+
+@app.command()
+def test(
+    config_path: Optional[Path] = typer.Option(
+        None, "--config", help="Pipeline configuration"
+    ),
+    component: Optional[str] = typer.Option(
+        None, "--component", help="Test specific component"
+    ),
+    stage: Optional[str] = typer.Option(None, "--stage", help="Test specific stage"),
+    sample_data: bool = typer.Option(
+        False, "--sample-data", help="Use sample test data"
+    ),
+):
+    """Test pipeline components"""
+
+    rprint("[blue]Running component tests...[/blue]")
+
+    try:
+        if config_path:
+            config = load_pipeline_config(config_path)
+            _test_pipeline_config(config, stage)
+        elif component:
+            _test_single_component(component, sample_data)
+        else:
+            _run_component_tests()
+
+        rprint("[green]✓ All tests passed![/green]")
+
+    except Exception as e:
+        rprint(f"[red]Tests failed:[/red] {e}")
+        raise typer.Exit(1)
+
+
+@app.command()
+def dev(
+    config_path: Path = typer.Argument(..., help="Path to pipeline configuration"),
+    port: int = typer.Option(8080, "--port", "-p", help="Development server port"),
+    reload: bool = typer.Option(True, "--reload/--no-reload", help="Enable hot reload"),
+    open_browser: bool = typer.Option(
+        True, "--browser/--no-browser", help="Open browser"
+    ),
+):
+    """Start development server with hot reload"""
+
+    rprint(f"[blue]Starting development server on port {port}...[/blue]")
+
+    try:
+        asyncio.run(_start_dev_server(config_path, port, reload, open_browser))
+    except KeyboardInterrupt:
+        rprint("\n[yellow]Development server stopped[/yellow]")
+    except Exception as e:
+        rprint(f"[red]Development server failed:[/red] {e}")
+        raise typer.Exit(1)
+
+
+@app.command()
+def info():
+    """Show framework information"""
+
+    rprint("[blue]Pipeline Framework Information[/blue]\n")
+
+    # Версия и компоненты
+    try:
+        from pipeline_core import __version__
+
+        rprint(f"Version: {__version__}")
+    except ImportError:
+        rprint("Version: Unknown")
+
+    # Доступные функции
+    features = get_available_features()
+    rprint(f"Available features: {', '.join(features)}")
+
+    # Системная информация
+    rprint(f"Python version: {sys.version}")
+    rprint(f"Platform: {sys.platform}")
+
+    # Статус компонентов
+    table = Table(title="Component Status")
+    table.add_column("Component", style="cyan")
+    table.add_column("Status", style="green")
+
+    status_checks = [
+        ("Core Components", CONFIG_AVAILABLE),
+        ("Pipeline Executor", PIPELINE_AVAILABLE),
+        ("Temporal Integration", TEMPORAL_AVAILABLE),
+        ("YAML Config Loader", CONFIG_AVAILABLE),
+    ]
+
+    for component, available in status_checks:
+        status = "✓ Available" if available else "✗ Not Available"
+        style = "green" if available else "red"
+        table.add_row(component, f"[{style}]{status}[/{style}]")
+
+    console.print(table)
+
+
+# Вспомогательные функции
+
+
+def _create_project_structure(project_path: Path, name: str, template: str):
+    """Создание структуры проекта"""
+    project_path.mkdir(parents=True, exist_ok=True)
+
+    # Основные директории
+    (project_path / "configs").mkdir(exist_ok=True)
+    (project_path / "transforms").mkdir(exist_ok=True)
+    (project_path / "schemas").mkdir(exist_ok=True)
+    (project_path / "tests").mkdir(exist_ok=True)
+    (project_path / "docs").mkdir(exist_ok=True)
+
+    # pipeline.yaml
+    from pipeline_core.config.yaml_loader import create_config_template
+
+    create_config_template(
+        project_path / "pipeline.yaml", pipeline_name=name, include_examples=True
+    )
+
+    # requirements.txt
+    requirements = [
+        "pipeline-framework>=0.1.0",
+        "pandas>=2.0.0",
+        "pydantic>=2.0.0",
+        "pyyaml>=6.0",
+        "structlog>=23.0.0",
+    ]
+
+    (project_path / "requirements.txt").write_text("\n".join(requirements))
+
+    # README.md
+    readme_content = f"""# {name}
+
+Pipeline created with Pipeline Framework.
+
+## Quick Start
+
+1. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. Validate configuration:
+   ```bash
+   pipeline validate pipeline.yaml
+   ```
+
+3. Run pipeline:
+   ```bash
+   pipeline run pipeline.yaml
+   ```
+
+## Project Structure
+
+- `pipeline.yaml` - Main pipeline configuration
+- `configs/` - Additional configuration files
+- `transforms/` - Data transformation scripts
+- `schemas/` - Data validation schemas
+- `tests/` - Unit and integration tests
+- `docs/` - Documentation
+
+## Development
+
+Run development server:
+```bash
+pipeline dev pipeline.yaml
+```
+
+Deploy to production:
+```bash
+pipeline deploy pipeline.yaml --env production
+```
+"""
+
+    (project_path / "README.md").write_text(readme_content)
+
+    # .gitignore
+    gitignore_content = """
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Environment
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Pipeline Framework
+.pipeline/
+logs/
+checkpoints/
+"""
+
+    (project_path / ".gitignore").write_text(gitignore_content)
+
+
+def _print_pipeline_summary(config):
+    """Вывод сводки по pipeline"""
+
+    panel = Panel.fit(
+        f"[bold blue]{config.name}[/bold blue]\n"
+        f"Version: {config.version}\n"
+        f"Description: {config.description}\n"
+        f"Stages: {len(config.stages)}",
+        title="Pipeline Configuration",
+    )
+    console.print(panel)
+
+    # Таблица этапов
+    table = Table(title="Pipeline Stages")
+    table.add_column("Order", style="dim")
+    table.add_column("Name", style="cyan")
+    table.add_column("Component", style="green")
+    table.add_column("Dependencies", style="yellow")
+
+    for i, stage in enumerate(config.stages):
+        dependencies = ", ".join(stage.depends_on) if stage.depends_on else "None"
+        table.add_row(str(i + 1), stage.name, stage.component, dependencies)
+
+    console.print(table)
+
+
+async def _deploy_to_temporal(client, config, schedule):
+    """Развертывание pipeline в Temporal"""
+    # Placeholder - здесь должна быть реальная логика развертывания
+    await asyncio.sleep(1)  # Симуляция развертывания
+    rprint("[yellow]Note: Temporal deployment is not yet implemented[/yellow]")
+
+
+def _test_pipeline_config(config, stage_name):
+    """Тестирование конфигурации pipeline"""
+    rprint(f"Testing pipeline configuration: {config.name}")
+
+    if stage_name:
+        stage = next((s for s in config.stages if s.name == stage_name), None)
+        if not stage:
+            raise ValueError(f"Stage '{stage_name}' not found")
+        rprint(f"Testing stage: {stage.name}")
+    else:
+        rprint(f"Testing all {len(config.stages)} stages")
+
+
+def _test_single_component(component_name, use_sample_data):
+    """Тестирование отдельного компонента"""
+    rprint(f"Testing component: {component_name}")
+
+    if use_sample_data:
+        rprint("Using sample test data")
+
+
+def _run_component_tests():
+    """Запуск всех тестов компонентов"""
+    rprint("Running all component tests...")
+
+
+async def _start_dev_server(config_path, port, reload, open_browser):
+    """Запуск development сервера"""
+    rprint(f"Development server running on http://localhost:{port}")
+    rprint("Press Ctrl+C to stop")
+
+    if open_browser:
+        import webbrowser
+
+        webbrowser.open(f"http://localhost:{port}")
+
+    # Placeholder для dev сервера
+    while True:
+        await asyncio.sleep(1)
 
 
 if __name__ == "__main__":
-    main()
+    app()

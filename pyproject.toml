@@ -1,26 +1,395 @@
+# pyproject.toml
+
 [project]
 name = "pipeline-framework"
 version = "0.1.0"
-description = "Add your description here"
+description = "Модульный framework для data workflows с Temporal integration"
 readme = "README.md"
-requires-python = ">=3.13"
-dependencies = []
+license = { text = "MIT" }
+authors = [
+    { name = "Ryibalchenko.NV", email = "Ryibalchenko.NV@dns-shop.ru" }
+]
+maintainers = [
+    { name = "Data Engineering Team", email = "data-team@company.com" }
+]
+keywords = ["data", "pipeline", "workflow", "etl", "temporal", "framework"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11", 
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Distributed Computing",
+    "Topic :: Database",
+]
+requires-python = ">=3.10"
+dependencies = [
+    "pipeline-core",
+]
 
-[tool.uv.sources]
-pipeline-core = { workspace = true }
+[project.optional-dependencies]
+# SQL компоненты
+sql = [
+    "extractor-sql",
+    "loaders-sql",
+    "sqlalchemy[asyncio]>=2.0.0",
+    "asyncpg>=0.29.0",     # PostgreSQL
+    "aiomysql>=0.2.0",     # MySQL
+    "aiosqlite>=0.20.0",   # SQLite
+]
+
+# Transformers
+transformers = [
+    "transformer-pandas",
+    "pandas>=2.0.0",
+    "polars>=0.20.0",
+    "numpy>=1.24.0",
+]
+
+# Temporal интеграция
+temporal = [
+    "temporalio>=1.5.0",
+]
+
+# CLI инструменты
+cli = [
+    "typer>=0.9.0",
+    "rich>=13.0.0",
+    "click>=8.0.0",
+]
+
+# Observability
+observability = [
+    "prometheus-client>=0.19.0",
+    "structlog>=23.0.0",
+    "opentelemetry-api>=1.20.0",
+    "opentelemetry-sdk>=1.20.0",
+]
+
+# Все дополнительные зависимости
+all = [
+    "pipeline-framework[sql,transformers,temporal,cli,observability]",
+]
+
+# Development зависимости
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.0.0",
+    "pytest-mock>=3.12.0",
+    "pytest-benchmark>=4.0.0",
+    "ruff>=0.8.0",
+    "pyright>=1.1.350",
+    "pre-commit>=3.0.0",
+    "bump2version>=1.0.0",
+]
+
+# Security сканирование
+security = [
+    "bandit>=1.7.0",
+    "safety>=3.0.0",
+]
+
+# Документация
+docs = [
+    "mkdocs>=1.5.0",
+    "mkdocs-material>=9.0.0",
+    "mkdocs-mermaid2-plugin>=1.1.0",
+    "mkdocstrings[python]>=0.24.0",
+]
+
+# Performance тестирование
+performance = [
+    "pytest-benchmark>=4.0.0",
+    "memory-profiler>=0.61.0",
+    "py-spy>=0.3.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/company/pipeline-framework"
+Documentation = "https://pipeline-framework.readthedocs.io"
+Repository = "https://github.com/company/pipeline-framework.git"
+Issues = "https://github.com/company/pipeline-framework/issues"
+Changelog = "https://github.com/company/pipeline-framework/blob/main/CHANGELOG.md"
+
+[project.scripts]
+pipeline = "pipeline_core.cli.main:app"
+
+[project.entry-points."pipeline_framework.components"]
+# SQL компоненты
+"extractor/sql" = "extractor_sql.components:SQLExtractor"
+"extractor/postgresql" = "extractor_sql.components:PostgresSQLExtractor" 
+"extractor/mysql" = "extractor_sql.components:MySQLExtractor"
+"extractor/sqlite" = "extractor_sql.components:SQLiteExtractor"
+
+# Pandas transformers
+"transformer/pandas" = "transformer_pandas.components:PandasTransformer"
+"transformer/script" = "transformer_pandas.components:ScriptTransformer"
+"transformer/sql" = "transformer_pandas.components:SQLTransformer"
+
+# SQL loaders
+"loader/sql" = "loaders_sql.components:SQLLoader"
+"loader/postgresql" = "loaders_sql.components:PostgreSQLLoader"
+"loader/mysql" = "loaders_sql.components:MySQLLoader"
+"loader/sqlite" = "loaders_sql.components:SQLiteLoader"
 
 [tool.uv.workspace]
 members = [
     "packages/pipeline-core",
-    "packages/components/extractors/stages",
     "packages/components/extractors/extractor_sql",
+    "packages/components/transformers/transformer-pandas", 
     "packages/components/loaders/loaders_sql",
-    "packages/components/transformers/transformer-polars",
 ]
 
-[dependency-groups]
-dev = [
-    "pyright>=1.1.402",
-    "pytest>=8.4.1",
-    "ruff>=0.12.0",
+[tool.uv.sources]
+pipeline-core = { workspace = true }
+extractor-sql = { workspace = true }
+transformer-pandas = { workspace = true }
+loaders-sql = { workspace = true }
+
+# Build конфигурация
+[build-system]
+requires = ["hatchling>=1.18.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["packages/pipeline-core/src"]
+
+# Ruff конфигурация
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+extend-exclude = [
+    ".git",
+    ".mypy_cache",
+    ".pytest_cache", 
+    ".ruff_cache",
+    ".tox",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "site-packages",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "UP",     # pyupgrade
+    "S",      # flake8-bandit
+    "PTH",    # flake8-use-pathlib
+    "SIM",    # flake8-simplify
+    "RUF",    # Ruff-specific rules
+    "T20",    # flake8-print
+    "PL",     # pylint
+    "TRY",    # tryceratops
+]
+
+ignore = [
+    "E501",   # line too long (handled by formatter)
+    "S101",   # assert detected (OK in tests)
+    "PLR2004", # magic value used in comparison
+    "TRY003", # avoid specifying long messages outside exception class
+    "B008",   # function calls in argument defaults
+    "S311",   # insecure random generators (OK for non-cryptographic use)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "S101",    # assert detected
+    "PLR2004", # magic value used in comparison
+    "S105",    # hardcoded password string
+    "S106",    # hardcoded password func arg
+]
+"**/conftest.py" = [
+    "S101",    # assert detected
+]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["typer.Option", "typer.Argument"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+# Pyright конфигурация
+[tool.pyright]
+include = ["packages/*/src"]
+exclude = [
+    "**/__pycache__",
+    "**/node_modules", 
+    ".git",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".tox", 
+    ".venv",
+    "build",
+    "dist",
+]
+reportMissingImports = true
+reportMissingTypeStubs = false
+pythonVersion = "3.10"
+typeCheckingMode = "strict"
+useLibraryCodeForTypes = true
+
+# Игнорируем некоторые проверки для совместимости
+reportUnknownMemberType = false
+reportUnknownArgumentType = false
+reportUnknownVariableType = false
+reportMissingParameterType = false
+
+# Pytest конфигурация
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = [
+    "--strict-markers",
+    "--strict-config", 
+    "--disable-warnings",
+    "--tb=short",
+    "--maxfail=5",
+    "--durations=10",
+]
+testpaths = [
+    "packages/*/tests",
+    "tests",
+]
+pythonpath = [
+    "packages/pipeline-core/src",
+    "packages/components/extractors/extractor_sql/src",
+    "packages/components/transformers/transformer-pandas/src",
+    "packages/components/loaders/loaders_sql/src",
+]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+markers = [
+    "unit: marks tests as unit tests",
+    "integration: marks tests as integration tests", 
+    "performance: marks tests as performance tests",
+    "slow: marks tests as slow running",
+    "temporal: marks tests that require Temporal",
+    "database: marks tests that require database",
+]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+# Coverage конфигурация
+[tool.coverage.run]
+source = [
+    "packages/pipeline-core/src",
+    "packages/components/extractors/extractor_sql/src",
+    "packages/components/transformers/transformer-pandas/src", 
+    "packages/components/loaders/loaders_sql/src",
+]
+omit = [
+    "*/tests/*",
+    "*/test_*",
+    "*/__pycache__/*",
+    "*/migrations/*",
+    "*/venv/*",
+    "*/.venv/*",
+]
+branch = true
+parallel = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError", 
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+    "@overload",
+]
+show_missing = true
+skip_covered = false
+fail_under = 85
+
+[tool.coverage.html]
+directory = "htmlcov"
+
+[tool.coverage.xml]
+output = "coverage.xml"
+
+# Bandit конфигурация (security)
+[tool.bandit]
+exclude_dirs = ["tests", "*/tests/*"]
+skips = ["B101", "B601"]  # assert и shell=True для тестов
+
+# Mypy конфигурация (backup for pyright)
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = [
+    "temporalio.*",
+    "prometheus_client.*",
+    "structlog.*",
+    "sqlalchemy.*",
+    "pandas.*",
+    "polars.*",
+    "typer.*",
+    "rich.*",
+]
+ignore_missing_imports = true
+
+# Bump2version конфигурация
+[tool.bumpversion]
+current_version = "0.1.0"
+parse = "(?P<major>\\d+)\\.(?P<minor>\\d+)\\.(?P<patch>\\d+)"
+serialize = ["{major}.{minor}.{patch}"]
+search = "{current_version}"
+replace = "{new_version}"
+commit = true
+tag = true
+
+[[tool.bumpversion.files]]
+filename = "pyproject.toml"
+search = 'version = "{current_version}"'
+replace = 'version = "{new_version}"'
+
+[[tool.bumpversion.files]]
+filename = "packages/pipeline-core/pyproject.toml"
+search = 'version = "{current_version}"'
+replace = 'version = "{new_version}"'
+
+[[tool.bumpversion.files]]
+filename = "packages/components/extractors/extractor_sql/pyproject.toml"
+search = 'version = "{current_version}"'
+replace = 'version = "{new_version}"'
+
+# Pre-commit конфигурация
+[tool.pre-commit]
+default_language_version.python = "python3.10"
+repos = [
+    {repo = "https://github.com/pre-commit/pre-commit-hooks",  rev = "v4.5.0",hooks = [{ id = "trailing-whitespace" }, { id = "end-of-file-fixer" }, { id = "check-yaml" }, { id = "check-added-large-files" }, { id = "check-case-conflict" }, { id = "check-merge-conflict" }, { id = "debug-statements" },] },
+    {repo = "https://github.com/astral-sh/ruff-pre-commit", rev = "v0.8.0",hooks = [{ id = "ruff", args = ["--fix"] },{ id = "ruff-format" }, ] },
+    {repo = "https://github.com/microsoft/pyright",rev = "v1.1.350", hooks = [ { id = "pyright" }, ] },
 ]

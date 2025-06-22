@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 class LogLevel(str, Enum):
     """Уровни логирования"""
+
     DEBUG = "DEBUG"
     INFO = "INFO"
     WARNING = "WARNING"
@@ -29,14 +30,18 @@ class ComponentSettings(BaseModel):
     # Основные настройки
     enabled: bool = Field(True, description="Включен ли компонент")
     timeout_seconds: int | None = Field(None, ge=1, description="Timeout выполнения")
-    retry_attempts: int = Field(0, ge=0, le=10, description="Количество повторных попыток")
+    retry_attempts: int = Field(
+        0, ge=0, le=10, description="Количество повторных попыток"
+    )
 
     # Логирование
     log_level: LogLevel = Field(LogLevel.INFO, description="Уровень логирования")
     metrics_enabled: bool = Field(True, description="Включить метрики")
 
     # Дополнительная конфигурация
-    custom_config: dict[str, Any] = Field(default_factory=dict, description="Дополнительная конфигурация")
+    custom_config: dict[str, Any] = Field(
+        default_factory=dict, description="Дополнительная конфигурация"
+    )
 
     @field_validator("log_level")
     @classmethod

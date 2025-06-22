@@ -52,7 +52,7 @@ from extractor_sql.components import (
 )
 from extractor_sql.exceptions import (
     ConfigurationError,
-    ConnectionError,
+    ConnectionError as SQLConnectionError,
     DataFormatError,
     QueryExecutionError,
     SQLExtractorError,
@@ -95,7 +95,7 @@ SUPPORTED_DIALECTS = [
 
 # Default configurations
 DEFAULT_QUERY_CONFIG = QueryConfig(
-    query="SELECT 1",
+    query="SELECT 1 AS test_column",
     timeout=300.0,
     fetch_size=10000,
     stream_results=False,
@@ -111,9 +111,9 @@ DEFAULT_POOL_CONFIG = ConnectionPoolConfig(
 
 DEFAULT_RETRY_CONFIG = RetryConfig(
     max_attempts=3,
-    initial_wait=1.0,
-    max_wait=60.0,
-    multiplier=2.0,
+    initial_delay=1.0,
+    max_delay=60.0,
+    exponential_base=2.0,
     jitter=True,
 )
 
@@ -209,7 +209,7 @@ __all__ = [
     "RetryConfig",
     # Exceptions
     "SQLExtractorError",
-    "ConnectionError",
+    "SQLConnectionError",
     "QueryExecutionError",
     "ConfigurationError",
     "DataFormatError",

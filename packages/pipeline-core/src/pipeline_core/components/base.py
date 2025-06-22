@@ -1,3 +1,5 @@
+# packages/pipeline-core/src/pipeline_core/components/base.py
+
 """
 Базовые компоненты для pipeline framework
 
@@ -18,7 +20,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, TypeVar, Optional, Dict, List
 
 # Imports для observability
 import structlog
@@ -28,29 +30,56 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # Проверяем доступность prometheus_client
 try:
-    from prometheus_client import Counter, Gauge, Histogram
+    from prometheus_client import Counter, Gauge, Histogram, CollectorRegistry
+
     PROMETHEUS_AVAILABLE = True
 except ImportError:
     PROMETHEUS_AVAILABLE = False
+
     # Создаем заглушки
     class Counter:
-        def __init__(self, *args, **kwargs): pass
-        def inc(self, *args, **kwargs): pass
-        def labels(self, *args, **kwargs): return self
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def inc(self, *args):
+            pass
+
+        def labels(self, *args, **kwargs):
+            return self
 
     class Histogram:
-        def __init__(self, *args, **kwargs): pass
-        def observe(self, *args, **kwargs): pass
-        def labels(self, *args, **kwargs): return self
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def observe(self, *args):
+            pass
+
+        def labels(self, *args, **kwargs):
+            return self
+
         def time(self):
             return lambda: None
 
     class Gauge:
-        def __init__(self, *args, **kwargs): pass
-        def set(self, *args, **kwargs): pass
-        def inc(self, *args, **kwargs): pass
-        def dec(self, *args, **kwargs): pass
-        def labels(self, *args, **kwargs): return self
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def set(self, *args):
+            pass
+
+        def inc(self, *args):
+            pass
+
+        def dec(self, *args):
+            pass
+
+        def labels(self, *args, **kwargs):
+            return self
+
+    class CollectorRegistry:
+        def __init__(self):
+            pass
+
 
 # Type variables для generic typing
 DataType = TypeVar("DataType")
@@ -88,7 +117,8 @@ class CheckpointStrategy(Enum):
     NONE = "none"
     MEMORY = "memory"
     DISK = "disk"
-    TEMPORAL = "temporal"
+    DATABASE = "database"
+    REMOTE_STORAGE = "remote_storage"
 
 
 @dataclass
@@ -96,66 +126,30 @@ class ExecutionMetadata:
     """Метаданные выполнения компонента"""
 
     execution_id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    started_at: datetime | None = None
-    finished_at: datetime | None = None
-    duration_seconds: float | None = None
-
-    # Data processing metrics
-    rows_processed: int | None = None
-    bytes_processed: int | None = None
-    files_processed: int | None = None
-
-    # Performance metrics
-    memory_peak_mb: float | None = None
-    cpu_time_seconds: float | None = None
-
-    # Checkpoints and recovery
-    checkpoints: dict[str, Any] = field(default_factory=dict)
-    last_checkpoint_at: datetime | None = None
-
-    # Custom metrics
-    custom_metrics: dict[str, Any] = field(default_factory=dict)
-
-    # Error information
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    duration_seconds: Optional[float] = None
+    rows_processed: Optional[int] = None
+    bytes_processed: Optional[int] = None
+    checkpoints: Dict[str, Any] = field(default_factory=dict)
+    custom_metrics: Dict[str, Any] = field(default_factory=dict)
     error_count: int = 0
-    last_error: str | None = None
-    error_details: list[str] = field(default_factory=list)
+    last_error: Optional[str] = None
 
-    def add_error(self, error: Exception, context: str | None = None):
-        """Добавление информации об ошибке"""
+    def mark_started(self) -> None:
+        """Отметка начала выполнения"""
+        self.started_at = datetime.now(UTC)
+
+    def mark_finished(self) -> None:
+        """Отметка завершения выполнения"""
+        self.finished_at = datetime.now(UTC)
+        if self.started_at:
+            self.duration_seconds = (self.finished_at - self.started_at).total_seconds()
+
+    def record_error(self, error: str) -> None:
+        """Запись ошибки"""
         self.error_count += 1
-        error_msg = str(error)
-        if context:
-            error_msg = f"{context}: {error_msg}"
-
-        self.last_error = error_msg
-        self.error_details.append(error_msg)
-
-        # Ограничиваем количество сохраняемых ошибок
-        if len(self.error_details) > 10:
-            self.error_details = self.error_details[-10:]
-
-    def to_dict(self) -> dict[str, Any]:
-        """Сериализация метаданных"""
-        return {
-            "execution_id": self.execution_id,
-            "started_at": self.started_at.isoformat() if self.started_at else None,
-            "finished_at": self.finished_at.isoformat() if self.finished_at else None,
-            "duration_seconds": self.duration_seconds,
-            "rows_processed": self.rows_processed,
-            "bytes_processed": self.bytes_processed,
-            "files_processed": self.files_processed,
-            "memory_peak_mb": self.memory_peak_mb,
-            "cpu_time_seconds": self.cpu_time_seconds,
-            "checkpoints": self.checkpoints,
-            "last_checkpoint_at": self.last_checkpoint_at.isoformat()
-            if self.last_checkpoint_at
-            else None,
-            "custom_metrics": self.custom_metrics,
-            "error_count": self.error_count,
-            "last_error": self.last_error,
-            "error_details": self.error_details,
-        }
+        self.last_error = error
 
 
 @dataclass
@@ -164,126 +158,84 @@ class ExecutionContext:
 
     pipeline_id: str
     stage_name: str
-    run_id: str | None = None
-    attempt_number: int = 1
-    is_retry: bool = False
+    run_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    execution_time: datetime = field(default_factory=lambda: datetime.now(UTC))
+    config: Dict[str, Any] = field(default_factory=dict)
+    global_variables: Dict[str, Any] = field(default_factory=dict)
+    previous_results: List[Any] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
-    # Previous stage results
-    previous_results: dict[str, Any] = field(default_factory=dict)
-    shared_state: dict[str, Any] = field(default_factory=dict)
+    def get_previous_result(self, stage_name: str) -> Optional[Any]:
+        """Получение результата предыдущего этапа по имени"""
+        for result in self.previous_results:
+            if hasattr(result, "stage_name") and result.stage_name == stage_name:
+                return result
+        return None
 
-    # Runtime configuration
-    dry_run: bool = False
-    debug_mode: bool = False
-    max_memory_mb: int | None = None
+    def get_global_variable(self, key: str, default: Any = None) -> Any:
+        """Получение глобальной переменной"""
+        return self.global_variables.get(key, default)
 
-    # Temporal workflow context (если используется)
-    temporal_activity_id: str | None = None
-    temporal_workflow_id: str | None = None
-
-    # Environment variables и secrets
-    environment_vars: dict[str, str] = field(default_factory=dict)
-    secrets: dict[str, str] = field(default_factory=dict)
-
-    def get_previous_result(self, stage_name: str) -> Any | None:
-        """Получить результат предыдущего этапа"""
-        return self.previous_results.get(stage_name)
-
-    def set_shared_value(self, key: str, value: Any):
-        """Установить значение в shared state"""
-        self.shared_state[key] = value
-
-    def get_shared_value(self, key: str, default: Any = None) -> Any:
-        """Получить значение из shared state"""
-        return self.shared_state.get(key, default)
-
-    def to_dict(self) -> dict[str, Any]:
-        """Сериализация контекста"""
-        return {
-            "pipeline_id": self.pipeline_id,
-            "stage_name": self.stage_name,
-            "run_id": self.run_id,
-            "attempt_number": self.attempt_number,
-            "is_retry": self.is_retry,
-            "previous_results_keys": list(self.previous_results.keys()),
-            "shared_state_keys": list(self.shared_state.keys()),
-            "dry_run": self.dry_run,
-            "debug_mode": self.debug_mode,
-            "max_memory_mb": self.max_memory_mb,
-            "temporal_activity_id": self.temporal_activity_id,
-            "temporal_workflow_id": self.temporal_workflow_id,
-        }
+    def set_global_variable(self, key: str, value: Any) -> None:
+        """Установка глобальной переменной"""
+        self.global_variables[key] = value
 
 
-@dataclass
-class ExecutionResult:
+class ExecutionResult(Generic[DataType]):
     """Результат выполнения компонента"""
 
-    success: bool
-    data: Any = None
-    error: str | None = None
-    metadata: ExecutionMetadata = field(default_factory=ExecutionMetadata)
+    def __init__(
+        self,
+        data: Optional[DataType] = None,
+        status: ExecutionStatus = ExecutionStatus.SUCCESS,
+        error: Optional[str] = None,
+        metadata: Optional[ExecutionMetadata] = None,
+        checkpoints: Optional[Dict[str, Any]] = None,
+    ):
+        self.data = data
+        self.status = status
+        self.error = error
+        self.metadata = metadata or ExecutionMetadata()
+        self.checkpoints = checkpoints or {}
 
-    # Output artifacts
-    artifacts: dict[str, Any] = field(default_factory=dict)
+    @property
+    def success(self) -> bool:
+        """Проверка успешности выполнения"""
+        return self.status == ExecutionStatus.SUCCESS
 
-    # Data quality metrics
-    data_quality_score: float | None = None
-    data_quality_issues: list[str] = field(default_factory=list)
-
-    # Checkpoint information
-    checkpoint_data: dict[str, Any] | None = None
-    requires_checkpoint: bool = False
-
-    def add_artifact(self, name: str, value: Any):
-        """Добавить артефакт к результату"""
-        self.artifacts[name] = value
-
-    def get_artifact(self, name: str, default: Any = None) -> Any:
-        """Получить артефакт"""
-        return self.artifacts.get(name, default)
-
-    def to_dict(self) -> dict[str, Any]:
-        """Сериализация результата"""
-        return {
-            "success": self.success,
-            "error": self.error,
-            "metadata": self.metadata.to_dict(),
-            "artifacts_keys": list(self.artifacts.keys()),
-            "data_quality_score": self.data_quality_score,
-            "data_quality_issues": self.data_quality_issues,
-            "requires_checkpoint": self.requires_checkpoint,
-            "has_checkpoint_data": self.checkpoint_data is not None,
-        }
+    @property
+    def failed(self) -> bool:
+        """Проверка неуспешности выполнения"""
+        return self.status == ExecutionStatus.FAILED
 
     @classmethod
     def success_result(
-            cls,
-            data: Any,
-            metadata: ExecutionMetadata | None = None,
-            **kwargs
-    ) -> "ExecutionResult":
-        """Создать успешный результат"""
+        cls,
+        data: DataType,
+        metadata: Optional[ExecutionMetadata] = None,
+        checkpoints: Optional[Dict[str, Any]] = None,
+    ) -> "ExecutionResult[DataType]":
+        """Создание успешного результата"""
         return cls(
-            success=True,
             data=data,
-            metadata=metadata or ExecutionMetadata(),
-            **kwargs
+            status=ExecutionStatus.SUCCESS,
+            metadata=metadata,
+            checkpoints=checkpoints,
         )
 
     @classmethod
     def failure_result(
-            cls,
-            error: str,
-            metadata: ExecutionMetadata | None = None,
-            **kwargs
-    ) -> "ExecutionResult":
-        """Создать результат с ошибкой"""
+        cls,
+        error: str,
+        metadata: Optional[ExecutionMetadata] = None,
+        data: Optional[DataType] = None,
+    ) -> "ExecutionResult[DataType]":
+        """Создание результата с ошибкой"""
         return cls(
-            success=False,
+            data=data,
+            status=ExecutionStatus.FAILED,
             error=error,
-            metadata=metadata or ExecutionMetadata(),
-            **kwargs
+            metadata=metadata,
         )
 
 
@@ -292,66 +244,58 @@ class ComponentConfig(BaseModel):
 
     model_config = ConfigDict(
         extra="allow",  # Разрешаем дополнительные поля
-        validate_assignment=True,  # Валидируем при присвоении
-        use_enum_values=True,  # Используем значения enum'ов
+        validate_assignment=True,
     )
 
-    # Базовые настройки
-    enabled: bool = Field(True, description="Включен ли компонент")
-    timeout_seconds: int | None = Field(None, ge=1, description="Timeout выполнения")
-    retry_attempts: int = Field(0, ge=0, le=10, description="Количество повторных попыток")
+    # Общие настройки
+    enabled: bool = Field(default=True, description="Включен ли компонент")
+    timeout: Optional[float] = Field(
+        default=None, ge=0, description="Timeout в секундах"
+    )
+    retry_attempts: int = Field(
+        default=0, ge=0, le=10, description="Количество повторов"
+    )
 
-    # Checkpoint settings
-    checkpoint_enabled: bool = Field(False, description="Включить checkpoint'ы")
+    # Checkpoint настройки
     checkpoint_strategy: CheckpointStrategy = Field(
-        CheckpointStrategy.NONE, description="Стратегия checkpoint'ов"
+        default=CheckpointStrategy.NONE, description="Стратегия checkpoint'ов"
+    )
+    checkpoint_interval: Optional[int] = Field(
+        default=None, ge=1, description="Интервал checkpoint'ов"
     )
 
     # Observability
-    log_level: str = Field("INFO", description="Уровень логирования")
-    metrics_enabled: bool = Field(True, description="Включить метрики")
-
-    @field_validator("log_level")
-    @classmethod
-    def validate_log_level(cls, v):
-        """Валидация уровня логирования"""
-        valid_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
-        if v.upper() not in valid_levels:
-            raise ValueError(f"log_level must be one of: {valid_levels}")
-        return v.upper()
+    metrics_enabled: bool = Field(default=True, description="Включены ли метрики")
+    logging_level: str = Field(default="INFO", description="Уровень логирования")
 
 
-class BaseComponent(Generic[DataType, ConfigType], ABC):
+class BaseComponent(ABC, Generic[DataType, ConfigType]):
     """
-    Абстрактный базовый класс для всех компонентов pipeline
+    Базовый абстрактный класс для всех компонентов pipeline
 
-    Предоставляет:
-    - Унифицированный интерфейс выполнения
-    - Observability (логирование, метрики)
-    - Checkpoint/restore функциональность
-    - Lifecycle management
-    - Error handling и retry logic
+    Обеспечивает:
+    - Стандартный интерфейс выполнения
+    - Управление конфигурацией
+    - Обработку ошибок
+    - Checkpoint функциональность
+    - Метрики и логирование
     """
 
-    def __init__(self, config: dict[str, Any] | ConfigType):
-        """Инициализация компонента"""
-        if isinstance(config, dict):
-            self.config = self._create_config(config)
-        else:
-            self.config = config
-
-        self.logger = structlog.get_logger(self.__class__.__name__)
+    def __init__(self, config: ConfigType):
+        self.config = config
         self._initialized = False
-        self._execution_count = 0
+        self._metrics_registry = None
 
-        # Метрики
-        self._setup_metrics()
+        # Настраиваем логирование
+        self.logger = structlog.get_logger(
+            component=self.__class__.__name__,
+            component_type=self.component_type.value,
+            component_name=self.name,
+        )
 
-    @property
-    @abstractmethod
-    def component_type(self) -> ComponentType:
-        """Тип компонента"""
-        pass
+        # Настраиваем метрики только если они включены
+        if PROMETHEUS_AVAILABLE and getattr(self.config, "metrics_enabled", True):
+            self._setup_metrics()
 
     @property
     @abstractmethod
@@ -360,59 +304,56 @@ class BaseComponent(Generic[DataType, ConfigType], ABC):
         pass
 
     @property
-    def version(self) -> str:
-        """Версия компонента"""
-        return "1.0.0"
+    @abstractmethod
+    def component_type(self) -> ComponentType:
+        """Тип компонента"""
+        pass
 
-    @property
-    def description(self) -> str:
-        """Описание компонента"""
-        return self.__doc__ or ""
-
-    @property
-    def dependencies(self) -> list[str]:
-        """Зависимости компонента"""
-        return []
-
-    @property
-    def input_schema(self) -> dict[str, Any] | None:
-        """JSON схема входных данных"""
-        return None
-
-    @property
-    def output_schema(self) -> dict[str, Any] | None:
-        """JSON схема выходных данных"""
-        return None
-
-    def _create_config(self, config_dict: dict[str, Any]) -> ConfigType:
+    @classmethod
+    def from_config_dict(cls, config_dict: Dict[str, Any]) -> ConfigType:
         """Создание объекта конфигурации из словаря"""
         # По умолчанию используем ComponentConfig
         return ComponentConfig(**config_dict)
 
     def _setup_metrics(self):
         """Настройка метрик Prometheus"""
-        if not PROMETHEUS_AVAILABLE or not getattr(self.config, 'metrics_enabled', True):
+        if not PROMETHEUS_AVAILABLE or not getattr(
+            self.config, "metrics_enabled", True
+        ):
             return
 
-        component_name = f"{self.component_type.value}_{self.name}"
+        # Создаем отдельный registry для каждого компонента
+        self._metrics_registry = CollectorRegistry()
 
-        self.execution_counter = Counter(
-            f"{component_name}_executions_total",
-            "Total number of component executions",
-            ["status", "component_type", "component_name"]
-        )
+        component_name = f"{self.component_type.value}_{self.name.replace('-', '_')}"
 
-        self.execution_duration = Histogram(
-            f"{component_name}_execution_duration_seconds",
-            "Component execution duration",
-            ["component_type", "component_name"]
-        )
+        try:
+            self.execution_counter = Counter(
+                f"{component_name}_executions_total",
+                "Total number of component executions",
+                ["status", "component_type", "component_name"],
+                registry=self._metrics_registry,
+            )
 
-        self.active_executions = Gauge(
-            f"{component_name}_active_executions",
-            "Number of active executions",
-            ["component_type", "component_name"]
-        )
+            self.execution_duration = Histogram(
+                f"{component_name}_execution_duration_seconds",
+                "Component execution duration",
+                ["component_type", "component_name"],
+                registry=self._metrics_registry,
+            )
+
+            self.active_executions = Gauge(
+                f"{component_name}_active_executions",
+                "Number of active executions",
+                ["component_type", "component_name"],
+                registry=self._metrics_registry,
+            )
+        except Exception as e:
+            self.logger.warning("Failed to setup metrics", error=str(e))
+            # Создаем заглушки
+            self.execution_counter = Counter("dummy", "dummy")
+            self.execution_duration = Histogram("dummy", "dummy")
+            self.active_executions = Gauge("dummy", "dummy")
 
     async def initialize(self) -> None:
         """Инициализация компонента (переопределяется в подклассах)"""
@@ -447,96 +388,84 @@ class BaseComponent(Generic[DataType, ConfigType], ABC):
         - Checkpoint'инг
         """
         execution_metadata = ExecutionMetadata()
-        execution_metadata.started_at = datetime.now(UTC)
+        execution_metadata.mark_started()
 
         # Обновляем метрики
-        if PROMETHEUS_AVAILABLE and hasattr(self, 'active_executions'):
+        if PROMETHEUS_AVAILABLE and hasattr(self, "active_executions"):
             self.active_executions.labels(
-                component_type=self.component_type.value,
-                component_name=self.name
+                component_type=self.component_type.value, component_name=self.name
             ).inc()
 
         try:
-            # Инициализация если нужно
+            # Инициализируем компонент если необходимо
             if not self._initialized:
                 await self.initialize()
 
+            # Логируем начало выполнения
             self.logger.info(
-                "Component execution started",
-                component=self.name,
-                execution_id=execution_metadata.execution_id,
+                "Starting component execution",
                 pipeline_id=context.pipeline_id,
                 stage_name=context.stage_name,
+                execution_id=execution_metadata.execution_id,
             )
 
-            # Выполнение основной логики
-            with self._measure_duration():
+            # Измеряем время выполнения
+            async with self._measure_duration():
+                # Выполняем основную логику
                 result_data = await self._execute_impl(context)
 
-            execution_metadata.finished_at = datetime.now(UTC)
-            execution_metadata.duration_seconds = (
-                    execution_metadata.finished_at - execution_metadata.started_at
-            ).total_seconds()
+            # Завершаем метаданные
+            execution_metadata.mark_finished()
 
-            self._execution_count += 1
-
-            # Создаем успешный результат
-            result = ExecutionResult.success_result(
-                data=result_data,
-                metadata=execution_metadata
+            # Логируем успешное завершение
+            self.logger.info(
+                "Component execution completed successfully",
+                execution_id=execution_metadata.execution_id,
+                duration=execution_metadata.duration_seconds,
             )
 
-            # Обновляем метрики
-            if PROMETHEUS_AVAILABLE and hasattr(self, 'execution_counter'):
+            # Обновляем метрики успеха
+            if PROMETHEUS_AVAILABLE and hasattr(self, "execution_counter"):
                 self.execution_counter.labels(
                     status="success",
                     component_type=self.component_type.value,
-                    component_name=self.name
+                    component_name=self.name,
                 ).inc()
 
-            self.logger.info(
-                "Component execution completed",
-                component=self.name,
-                execution_id=execution_metadata.execution_id,
-                duration_seconds=execution_metadata.duration_seconds,
+            return ExecutionResult.success_result(
+                data=result_data, metadata=execution_metadata
             )
 
-            return result
-
         except Exception as e:
-            execution_metadata.finished_at = datetime.now(UTC)
-            execution_metadata.duration_seconds = (
-                    execution_metadata.finished_at - execution_metadata.started_at
-            ).total_seconds()
-            execution_metadata.add_error(e)
+            # Завершаем метаданные
+            execution_metadata.mark_finished()
+            execution_metadata.record_error(str(e))
 
-            # Обновляем метрики
-            if PROMETHEUS_AVAILABLE and hasattr(self, 'execution_counter'):
-                self.execution_counter.labels(
-                    status="failed",
-                    component_type=self.component_type.value,
-                    component_name=self.name
-                ).inc()
-
+            # Логируем ошибку
             self.logger.error(
                 "Component execution failed",
-                component=self.name,
                 execution_id=execution_metadata.execution_id,
                 error=str(e),
                 traceback=traceback.format_exc(),
             )
 
+            # Обновляем метрики ошибок
+            if PROMETHEUS_AVAILABLE and hasattr(self, "execution_counter"):
+                self.execution_counter.labels(
+                    status="failed",
+                    component_type=self.component_type.value,
+                    component_name=self.name,
+                ).inc()
+
             return ExecutionResult.failure_result(
-                error=str(e),
-                metadata=execution_metadata
+                error=str(e), metadata=execution_metadata
             )
 
         finally:
             # Уменьшаем счетчик активных выполнений
-            if PROMETHEUS_AVAILABLE and hasattr(self, 'active_executions'):
+            if PROMETHEUS_AVAILABLE and hasattr(self, "active_executions"):
                 self.active_executions.labels(
-                    component_type=self.component_type.value,
-                    component_name=self.name
+                    component_type=self.component_type.value, component_name=self.name
                 ).dec()
 
     @asynccontextmanager
@@ -547,10 +476,9 @@ class BaseComponent(Generic[DataType, ConfigType], ABC):
             yield
         finally:
             duration = asyncio.get_event_loop().time() - start_time
-            if PROMETHEUS_AVAILABLE and hasattr(self, 'execution_duration'):
+            if PROMETHEUS_AVAILABLE and hasattr(self, "execution_duration"):
                 self.execution_duration.labels(
-                    component_type=self.component_type.value,
-                    component_name=self.name
+                    component_type=self.component_type.value, component_name=self.name
                 ).observe(duration)
 
     def __repr__(self) -> str:

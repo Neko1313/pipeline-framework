@@ -1,247 +1,252 @@
+# packages/pipeline-core/src/pipeline_core/config/yaml_loader.py
+
 """
-YAML Configuration Loader с расширенными возможностями
+YAML Configuration Loader для pipeline framework
 
 Поддерживает:
-- Environment variables substitution
-- File inclusion (include/extends)
-- Template inheritance
-- Validation с помощью Pydantic
-- Multiple format support (YAML, JSON)
+- Загрузку YAML конфигураций pipeline
+- Подстановку переменных окружения
+- Template рендеринг с Jinja2
+- Валидацию конфигурации
+- Include/extend механизм
+- Schema versioning
 """
 
 import os
 import re
-import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
-from urllib.parse import urlparse
+from typing import Dict, Any, List, Optional, Union
+from datetime import datetime
 
 import yaml
 import structlog
 from pydantic import ValidationError
 
-from pipeline_core.config.models import (
-    PipelineConfig,
-    FullPipelineConfig,
-    RuntimeConfig,
-)
+try:
+    from jinja2 import Environment, FileSystemLoader, Template, TemplateSyntaxError
+
+    JINJA2_AVAILABLE = True
+except ImportError:
+    JINJA2_AVAILABLE = False
+
+from pipeline_core.config.models import PipelineConfig, StageConfig
 
 logger = structlog.get_logger(__name__)
 
 
-class YAMLLoaderError(Exception):
+class YAMLConfigError(Exception):
     """Ошибка загрузки YAML конфигурации"""
 
     pass
 
 
-class ConfigValidator:
-    """Валидатор конфигураций"""
+class YAMLConfigLoader:
+    """
+    Загрузчик YAML конфигураций для pipeline
 
-    @staticmethod
-    def validate_pipeline_config(data: Dict[str, Any]) -> PipelineConfig:
-        """Валидация конфигурации pipeline"""
+    Обеспечивает:
+    - Парсинг YAML файлов
+    - Подстановку переменных
+    - Template рендеринг
+    - Валидацию схемы
+    - Include/extend поддержку
+    """
+
+    def __init__(
+        self,
+        base_path: Optional[Path] = None,
+        environment: str = "development",
+        enable_templating: bool = True,
+        enable_includes: bool = True,
+    ):
+        self.base_path = Path(base_path) if base_path else Path.cwd()
+        self.environment = environment
+        self.enable_templating = enable_templating
+        self.enable_includes = enable_includes
+
+        # Template engine
+        self._jinja_env = None
+        if JINJA2_AVAILABLE and enable_templating:
+            self._setup_jinja_environment()
+
+        # Кэш для загруженных файлов
+        self._file_cache: Dict[str, Dict[str, Any]] = {}
+
+        self.logger = structlog.get_logger(
+            component="yaml_config_loader",
+            environment=environment,
+        )
+
+    def _setup_jinja_environment(self):
+        """Настройка Jinja2 окружения"""
+        if not JINJA2_AVAILABLE:
+            return
+
+        # Создаем loader для поиска template файлов
+        template_paths = [
+            str(self.base_path),
+            str(self.base_path / "templates"),
+            str(self.base_path / "configs"),
+        ]
+
+        file_loader = FileSystemLoader(template_paths)
+
+        self._jinja_env = Environment(
+            loader=file_loader,
+            # Настройки безопасности
+            autoescape=False,
+            trim_blocks=True,
+            lstrip_blocks=True,
+        )
+
+        # Добавляем custom функции
+        self._jinja_env.globals.update(
+            {
+                "env": self._get_env_var,
+                "now": datetime.now,
+                "date_format": self._format_date,
+            }
+        )
+
+    def _get_env_var(self, name: str, default: str = "") -> str:
+        """Получение переменной окружения для Jinja2"""
+        return os.getenv(name, default)
+
+    def _format_date(self, date_obj: datetime, format_str: str = "%Y-%m-%d") -> str:
+        """Форматирование даты для Jinja2"""
+        return date_obj.strftime(format_str)
+
+    def load_config(self, config_path: Union[str, Path]) -> PipelineConfig:
+        """
+        Загрузка конфигурации pipeline из YAML файла
+
+        Args:
+            config_path: Путь к YAML файлу
+
+        Returns:
+            Объект PipelineConfig
+
+        Raises:
+            YAMLConfigError: При ошибках загрузки или валидации
+        """
+        config_path = Path(config_path)
+
+        if not config_path.is_absolute():
+            config_path = self.base_path / config_path
+
         try:
-            return PipelineConfig(**data)
-        except ValidationError as e:
-            raise YAMLLoaderError(f"Pipeline configuration validation failed: {e}")
+            self.logger.info("Loading pipeline configuration", path=str(config_path))
 
-    @staticmethod
-    def validate_full_config(data: Dict[str, Any]) -> FullPipelineConfig:
-        """Валидация полной конфигурации"""
+            # Загружаем и обрабатываем YAML
+            raw_config = self._load_yaml_file(config_path)
+
+            # Обрабатываем includes
+            if self.enable_includes:
+                raw_config = self._process_includes(raw_config, config_path.parent)
+
+            # Подстановка переменных
+            raw_config = self._substitute_variables(raw_config)
+
+            # Template рендеринг
+            if self.enable_templating and JINJA2_AVAILABLE:
+                raw_config = self._render_templates(raw_config)
+
+            # Применяем environment-specific настройки
+            raw_config = self._apply_environment_config(raw_config)
+
+            # Валидация и создание объекта конфигурации
+            pipeline_config = self._validate_and_create_config(raw_config)
+
+            self.logger.info(
+                "Pipeline configuration loaded successfully",
+                pipeline_name=pipeline_config.name,
+                stages_count=len(pipeline_config.stages),
+            )
+
+            return pipeline_config
+
+        except Exception as e:
+            self.logger.error(
+                "Failed to load pipeline configuration",
+                error=str(e),
+                path=str(config_path),
+            )
+            raise YAMLConfigError(
+                f"Failed to load config from {config_path}: {e}"
+            ) from e
+
+    def _load_yaml_file(self, file_path: Path) -> Dict[str, Any]:
+        """Загрузка YAML файла"""
+        if not file_path.exists():
+            raise FileNotFoundError(f"Config file not found: {file_path}")
+
+        # Проверяем кэш
+        cache_key = str(file_path.absolute())
+        file_stat = file_path.stat()
+
+        if cache_key in self._file_cache:
+            cached_data, cached_mtime = self._file_cache[cache_key]
+            if cached_mtime >= file_stat.st_mtime:
+                return cached_data
+
         try:
-            return FullPipelineConfig(**data)
-        except ValidationError as e:
-            raise YAMLLoaderError(f"Full configuration validation failed: {e}")
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
 
+            # Парсим YAML
+            data = yaml.safe_load(content)
 
-class EnvironmentSubstitution:
-    """Обработчик подстановки переменных окружения"""
+            # Сохраняем в кэш
+            self._file_cache[cache_key] = (data, file_stat.st_mtime)
 
-    # Паттерны для различных форматов переменных
-    PATTERNS = {
-        "simple": re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)"),  # $VAR
-        "braced": re.compile(r"\$\{([^}:]+)\}"),  # ${VAR}
-        "default": re.compile(r"\$\{([^}:]+):([^}]*)\}"),  # ${VAR:default}
-    }
-
-    @classmethod
-    def substitute(
-        cls, value: Any, env_overrides: Optional[Dict[str, str]] = None
-    ) -> Any:
-        """Подстановка переменных окружения"""
-        if isinstance(value, str):
-            return cls._substitute_string(value, env_overrides or {})
-        elif isinstance(value, dict):
-            return {k: cls.substitute(v, env_overrides) for k, v in value.items()}
-        elif isinstance(value, list):
-            return [cls.substitute(v, env_overrides) for v in value]
-        else:
-            return value
-
-    @classmethod
-    def _substitute_string(cls, text: str, env_overrides: Dict[str, str]) -> str:
-        """Подстановка переменных в строке"""
-        # Сначала подставляем переменные с default значениями
-        text = cls.PATTERNS["default"].sub(
-            lambda m: cls._get_env_var(m.group(1), m.group(2), env_overrides), text
-        )
-
-        # Затем обычные braced переменные
-        text = cls.PATTERNS["braced"].sub(
-            lambda m: cls._get_env_var(m.group(1), "", env_overrides), text
-        )
-
-        # Наконец простые переменные
-        text = cls.PATTERNS["simple"].sub(
-            lambda m: cls._get_env_var(m.group(1), "", env_overrides), text
-        )
-
-        return text
-
-    @staticmethod
-    def _get_env_var(var_name: str, default: str, env_overrides: Dict[str, str]) -> str:
-        """Получение значения переменной окружения"""
-        # Сначала проверяем overrides, затем os.environ, затем default
-        return env_overrides.get(var_name, os.getenv(var_name, default))
-
-
-class TemplateProcessor:
-    """Обработчик шаблонов и наследования"""
-
-    def __init__(self, base_path: Optional[Path] = None):
-        self.base_path = base_path or Path.cwd()
-        self._loaded_files: Set[Path] = set()
-
-    def process_includes(
-        self, data: Dict[str, Any], current_file: Optional[Path] = None
-    ) -> Dict[str, Any]:
-        """Обработка include директив"""
-        if not isinstance(data, dict):
             return data
 
-        # Обрабатываем include на верхнем уровне
-        if "include" in data:
-            included_data = self._process_include_directive(
-                data["include"], current_file
-            )
-            # Удаляем include директиву
-            data = {k: v for k, v in data.items() if k != "include"}
-            # Мержим данные (текущие данные имеют приоритет)
-            data = self._deep_merge(included_data, data)
+        except yaml.YAMLError as e:
+            raise YAMLConfigError(f"Invalid YAML syntax in {file_path}: {e}") from e
 
-        # Обрабатываем extends на верхнем уровне
-        if "extends" in data:
-            base_data = self._process_extends_directive(data["extends"], current_file)
-            # Удаляем extends директиву
-            data = {k: v for k, v in data.items() if k != "extends"}
-            # Мержим данные (текущие данные переопределяют базовые)
-            data = self._deep_merge(base_data, data)
+    def _process_includes(
+        self, config: Dict[str, Any], base_dir: Path
+    ) -> Dict[str, Any]:
+        """Обработка include директив"""
+        if not isinstance(config, dict):
+            return config
 
-        # Рекурсивно обрабатываем вложенные структуры
-        for key, value in data.items():
+        # Ищем include директивы
+        if "include" in config:
+            includes = config.pop("include")
+            if isinstance(includes, str):
+                includes = [includes]
+
+            # Загружаем каждый include файл
+            for include_path in includes:
+                include_file = base_dir / include_path
+                included_config = self._load_yaml_file(include_file)
+
+                # Рекурсивно обрабатываем includes во включенных файлах
+                included_config = self._process_includes(
+                    included_config, include_file.parent
+                )
+
+                # Мержим конфигурации (текущая перезаписывает включенную)
+                config = self._deep_merge(included_config, config)
+
+        # Рекурсивно обрабатываем вложенные объекты
+        for key, value in config.items():
             if isinstance(value, dict):
-                data[key] = self.process_includes(value, current_file)
+                config[key] = self._process_includes(value, base_dir)
             elif isinstance(value, list):
-                data[key] = [
-                    self.process_includes(item, current_file)
+                config[key] = [
+                    self._process_includes(item, base_dir)
                     if isinstance(item, dict)
                     else item
                     for item in value
                 ]
 
-        return data
+        return config
 
-    def _process_include_directive(
-        self, include_spec: Union[str, List[str]], current_file: Optional[Path]
+    def _deep_merge(
+        self, base: Dict[str, Any], override: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Обработка include директивы"""
-        if isinstance(include_spec, str):
-            include_files = [include_spec]
-        else:
-            include_files = include_spec
-
-        result = {}
-
-        for include_file in include_files:
-            file_path = self._resolve_file_path(include_file, current_file)
-
-            if file_path in self._loaded_files:
-                logger.warning("Circular include detected", file=str(file_path))
-                continue
-
-            try:
-                self._loaded_files.add(file_path)
-                included_data = self._load_file(file_path)
-                included_data = self.process_includes(included_data, file_path)
-                result = self._deep_merge(result, included_data)
-            finally:
-                self._loaded_files.discard(file_path)
-
-        return result
-
-    def _process_extends_directive(
-        self, extends_spec: str, current_file: Optional[Path]
-    ) -> Dict[str, Any]:
-        """Обработка extends директивы"""
-        file_path = self._resolve_file_path(extends_spec, current_file)
-
-        if file_path in self._loaded_files:
-            raise YAMLLoaderError(f"Circular extends detected: {file_path}")
-
-        try:
-            self._loaded_files.add(file_path)
-            base_data = self._load_file(file_path)
-            return self.process_includes(base_data, file_path)
-        finally:
-            self._loaded_files.discard(file_path)
-
-    def _resolve_file_path(self, file_spec: str, current_file: Optional[Path]) -> Path:
-        """Разрешение пути к файлу"""
-        # Проверяем на URL
-        if self._is_url(file_spec):
-            raise YAMLLoaderError("URL includes not yet supported")
-
-        file_path = Path(file_spec)
-
-        # Если путь не абсолютный, делаем его относительным к текущему файлу или base_path
-        if not file_path.is_absolute():
-            if current_file:
-                file_path = current_file.parent / file_path
-            else:
-                file_path = self.base_path / file_path
-
-        # Нормализуем путь
-        file_path = file_path.resolve()
-
-        if not file_path.exists():
-            raise YAMLLoaderError(f"Include file not found: {file_path}")
-
-        return file_path
-
-    def _load_file(self, file_path: Path) -> Dict[str, Any]:
-        """Загрузка файла"""
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                if file_path.suffix.lower() in [".yml", ".yaml"]:
-                    return yaml.safe_load(f) or {}
-                elif file_path.suffix.lower() == ".json":
-                    return json.load(f)
-                else:
-                    raise YAMLLoaderError(
-                        f"Unsupported file format: {file_path.suffix}"
-                    )
-        except Exception as e:
-            raise YAMLLoaderError(f"Failed to load file {file_path}: {e}")
-
-    @staticmethod
-    def _is_url(spec: str) -> bool:
-        """Проверка, является ли строка URL"""
-        parsed = urlparse(spec)
-        return parsed.scheme in ["http", "https", "ftp", "ftps"]
-
-    @staticmethod
-    def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
         """Глубокое слияние словарей"""
         result = base.copy()
 
@@ -251,194 +256,359 @@ class TemplateProcessor:
                 and isinstance(result[key], dict)
                 and isinstance(value, dict)
             ):
-                result[key] = TemplateProcessor._deep_merge(result[key], value)
+                result[key] = self._deep_merge(result[key], value)
             else:
                 result[key] = value
 
         return result
 
+    def _substitute_variables(self, config: Any) -> Any:
+        """Подстановка переменных окружения"""
+        if isinstance(config, str):
+            # Паттерн для переменных: ${VAR_NAME} или ${VAR_NAME:default_value}
+            pattern = r"\$\{([^}:]+)(?::([^}]*))?\}"
 
-class YAMLConfigLoader:
-    """Основной загрузчик YAML конфигураций"""
+            def replace_var(match):
+                var_name = match.group(1)
+                default_value = match.group(2) if match.group(2) is not None else ""
+                return os.getenv(var_name, default_value)
 
-    def __init__(
-        self,
-        base_path: Optional[Path] = None,
-        enable_env_substitution: bool = True,
-        enable_template_processing: bool = True,
-    ):
-        self.base_path = base_path or Path.cwd()
-        self.enable_env_substitution = enable_env_substitution
-        self.enable_template_processing = enable_template_processing
+            return re.sub(pattern, replace_var, config)
 
-        self.validator = ConfigValidator()
-        self.env_substitution = EnvironmentSubstitution()
-        self.template_processor = TemplateProcessor(base_path)
-
-    def load_pipeline_config(
-        self,
-        config_path: Union[str, Path],
-        env_overrides: Optional[Dict[str, str]] = None,
-        runtime_config: Optional[RuntimeConfig] = None,
-    ) -> FullPipelineConfig:
-        """Загрузка конфигурации pipeline"""
-
-        config_path = Path(config_path)
-        logger.info("Loading pipeline configuration", path=str(config_path))
-
-        try:
-            # 1. Загружаем базовый YAML
-            raw_data = self._load_yaml_file(config_path)
-
-            # 2. Обрабатываем шаблоны и include
-            if self.enable_template_processing:
-                raw_data = self.template_processor.process_includes(
-                    raw_data, config_path
-                )
-
-            # 3. Подставляем переменные окружения
-            if self.enable_env_substitution:
-                raw_data = self.env_substitution.substitute(raw_data, env_overrides)
-
-            # 4. Извлекаем секцию pipeline
-            if "pipeline" not in raw_data:
-                # Если нет секции pipeline, считаем что весь файл - это конфигурация pipeline
-                pipeline_data = raw_data
-            else:
-                pipeline_data = raw_data["pipeline"]
-
-            # 5. Валидируем конфигурацию pipeline
-            pipeline_config = self.validator.validate_pipeline_config(pipeline_data)
-
-            # 6. Создаем полную конфигурацию
-            full_config_data = {
-                "pipeline": pipeline_config.dict(),
-                "runtime": runtime_config.dict() if runtime_config else None,
+        elif isinstance(config, dict):
+            return {
+                key: self._substitute_variables(value) for key, value in config.items()
             }
 
-            # Добавляем дополнительные секции из исходного файла
-            for key, value in raw_data.items():
-                if key not in ["pipeline", "runtime"]:
-                    full_config_data[key] = value
+        elif isinstance(config, list):
+            return [self._substitute_variables(item) for item in config]
 
-            full_config = self.validator.validate_full_config(full_config_data)
+        else:
+            return config
 
-            logger.info(
-                "Pipeline configuration loaded successfully",
-                pipeline_name=pipeline_config.name,
-                stages_count=len(pipeline_config.stages),
+    def _render_templates(self, config: Any) -> Any:
+        """Рендеринг Jinja2 templates"""
+        if not self._jinja_env:
+            return config
+
+        # Контекст для рендеринга
+        template_context = {
+            "environment": self.environment,
+            "ds": datetime.now().strftime("%Y-%m-%d"),  # Airflow-style date
+            "ts": datetime.now().isoformat(),
+        }
+
+        if isinstance(config, str):
+            # Проверяем наличие Jinja2 синтаксиса
+            if "{{" in config or "{%" in config:
+                try:
+                    template = self._jinja_env.from_string(config)
+                    return template.render(**template_context)
+                except TemplateSyntaxError as e:
+                    self.logger.warning(
+                        "Template syntax error", template=config, error=str(e)
+                    )
+                    return config
+            return config
+
+        elif isinstance(config, dict):
+            return {key: self._render_templates(value) for key, value in config.items()}
+
+        elif isinstance(config, list):
+            return [self._render_templates(item) for item in config]
+
+        else:
+            return config
+
+    def _apply_environment_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Применение environment-specific настроек"""
+        if "environments" not in config:
+            return config
+
+        environments = config.get("environments", {})
+        env_config = environments.get(self.environment, {})
+
+        if env_config:
+            self.logger.debug(
+                "Applying environment configuration", environment=self.environment
             )
+            # Мержим environment-specific настройки
+            config = self._deep_merge(config, env_config)
 
-            return full_config
+        # Удаляем секцию environments из итоговой конфигурации
+        config.pop("environments", None)
+
+        return config
+
+    def _validate_and_create_config(self, raw_config: Dict[str, Any]) -> PipelineConfig:
+        """Валидация и создание объекта PipelineConfig"""
+        try:
+            # Извлекаем секцию pipeline
+            if "pipeline" not in raw_config:
+                raise YAMLConfigError("Missing 'pipeline' section in configuration")
+
+            pipeline_data = raw_config["pipeline"]
+
+            # Преобразуем stages в объекты StageConfig
+            stages_data = pipeline_data.get("stages", [])
+            stages = []
+
+            for i, stage_data in enumerate(stages_data):
+                try:
+                    # Добавляем индекс для порядка выполнения
+                    stage_data["execution_order"] = i
+
+                    stage_config = StageConfig(**stage_data)
+                    stages.append(stage_config)
+
+                except ValidationError as e:
+                    raise YAMLConfigError(
+                        f"Invalid stage configuration at index {i}: {e}"
+                    ) from e
+
+            # Заменяем stages на валидированные объекты
+            pipeline_data["stages"] = stages
+
+            # Создаем и валидируем PipelineConfig
+            return PipelineConfig(**pipeline_data)
+
+        except ValidationError as e:
+            raise YAMLConfigError(
+                f"Pipeline configuration validation failed: {e}"
+            ) from e
+
+    def validate_config_file(self, config_path: Union[str, Path]) -> Dict[str, Any]:
+        """
+        Валидация YAML файла без создания объекта конфигурации
+
+        Args:
+            config_path: Путь к файлу
+
+        Returns:
+            Результат валидации
+        """
+        try:
+            config = self.load_config(config_path)
+            return {
+                "valid": True,
+                "errors": [],
+                "warnings": [],
+                "pipeline_name": config.name,
+                "stages_count": len(config.stages),
+            }
 
         except Exception as e:
-            logger.error(
-                "Failed to load pipeline configuration",
-                path=str(config_path),
-                error=str(e),
-            )
-            raise YAMLLoaderError(
-                f"Failed to load configuration from {config_path}: {e}"
-            )
+            return {
+                "valid": False,
+                "errors": [str(e)],
+                "warnings": [],
+                "pipeline_name": None,
+                "stages_count": 0,
+            }
 
-    def load_from_dict(
-        self, data: Dict[str, Any], env_overrides: Optional[Dict[str, str]] = None
-    ) -> FullPipelineConfig:
-        """Загрузка конфигурации из словаря"""
+    def get_available_templates(self) -> List[str]:
+        """Получение списка доступных template файлов"""
+        if not self._jinja_env:
+            return []
 
-        logger.debug("Loading pipeline configuration from dict")
+        templates = []
+        for loader in self._jinja_env.loaders:
+            if hasattr(loader, "list_templates"):
+                templates.extend(loader.list_templates())
+
+        return sorted(set(templates))
+
+    def render_template_string(
+        self, template_str: str, context: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """
+        Рендеринг строки как Jinja2 template
+
+        Args:
+            template_str: Template строка
+            context: Контекст для рендеринга
+
+        Returns:
+            Отрендеренная строка
+        """
+        if not self._jinja_env:
+            return template_str
+
+        context = context or {}
+        default_context = {
+            "environment": self.environment,
+            "ds": datetime.now().strftime("%Y-%m-%d"),
+            "ts": datetime.now().isoformat(),
+        }
+        default_context.update(context)
 
         try:
-            # Обрабатываем подстановку переменных
-            if self.enable_env_substitution:
-                data = self.env_substitution.substitute(data, env_overrides)
+            template = self._jinja_env.from_string(template_str)
+            return template.render(**default_context)
+        except Exception as e:
+            self.logger.error(
+                "Template rendering failed", template=template_str, error=str(e)
+            )
+            return template_str
 
-            # Валидируем
-            if "pipeline" in data:
-                full_config = self.validator.validate_full_config(data)
-            else:
-                # Весь словарь - конфигурация pipeline
-                pipeline_config = self.validator.validate_pipeline_config(data)
-                full_config = FullPipelineConfig(pipeline=pipeline_config)
+    def export_config_as_dict(self, config: PipelineConfig) -> Dict[str, Any]:
+        """Экспорт конфигурации обратно в словарь"""
+        return {
+            "pipeline": config.model_dump(
+                exclude_none=True,
+                exclude_unset=False,
+            )
+        }
 
-            return full_config
+    def save_config(
+        self, config: PipelineConfig, output_path: Union[str, Path]
+    ) -> None:
+        """
+        Сохранение конфигурации в YAML файл
+
+        Args:
+            config: Объект конфигурации
+            output_path: Путь для сохранения
+        """
+        output_path = Path(output_path)
+
+        config_dict = self.export_config_as_dict(config)
+
+        try:
+            with open(output_path, "w", encoding="utf-8") as f:
+                yaml.dump(
+                    config_dict,
+                    f,
+                    default_flow_style=False,
+                    allow_unicode=True,
+                    sort_keys=False,
+                    indent=2,
+                )
+
+            self.logger.info("Configuration saved", path=str(output_path))
 
         except Exception as e:
-            logger.error(
-                "Failed to load pipeline configuration from dict", error=str(e)
-            )
-            raise YAMLLoaderError(f"Failed to load configuration from dict: {e}")
-
-    def load_from_string(
-        self, yaml_content: str, env_overrides: Optional[Dict[str, str]] = None
-    ) -> FullPipelineConfig:
-        """Загрузка конфигурации из строки"""
-
-        logger.debug("Loading pipeline configuration from string")
-
-        try:
-            # Парсим YAML
-            data = yaml.safe_load(yaml_content)
-            if not data:
-                raise YAMLLoaderError("Empty YAML content")
-
-            return self.load_from_dict(data, env_overrides)
-
-        except yaml.YAMLError as e:
-            raise YAMLLoaderError(f"YAML parsing error: {e}")
-
-    def validate_config_file(self, config_path: Union[str, Path]) -> List[str]:
-        """Валидация файла конфигурации без загрузки"""
-
-        errors = []
-
-        try:
-            self.load_pipeline_config(config_path)
-        except YAMLLoaderError as e:
-            errors.append(str(e))
-        except Exception as e:
-            errors.append(f"Unexpected error: {e}")
-
-        return errors
-
-    def _load_yaml_file(self, file_path: Path) -> Dict[str, Any]:
-        """Загрузка YAML файла"""
-
-        if not file_path.exists():
-            raise YAMLLoaderError(f"Configuration file not found: {file_path}")
-
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                data = yaml.safe_load(f)
-
-            if not data:
-                raise YAMLLoaderError("Empty configuration file")
-
-            if not isinstance(data, dict):
-                raise YAMLLoaderError("Configuration must be a YAML object/dict")
-
-            return data
-
-        except yaml.YAMLError as e:
-            raise YAMLLoaderError(f"YAML parsing error in {file_path}: {e}")
-        except Exception as e:
-            raise YAMLLoaderError(f"Failed to read file {file_path}: {e}")
+            raise YAMLConfigError(f"Failed to save config to {output_path}: {e}") from e
 
 
-# Factory functions для удобства
-def load_pipeline_config(config_path: Union[str, Path], **kwargs) -> FullPipelineConfig:
-    """Быстрая загрузка конфигурации pipeline"""
-    loader = YAMLConfigLoader()
-    return loader.load_pipeline_config(config_path, **kwargs)
+# Утилитарные функции
 
 
-def load_config_from_dict(data: Dict[str, Any], **kwargs) -> FullPipelineConfig:
-    """Быстрая загрузка из словаря"""
-    loader = YAMLConfigLoader()
-    return loader.load_from_dict(data, **kwargs)
+def load_pipeline_config(
+    config_path: Union[str, Path],
+    environment: str = "development",
+    base_path: Optional[Path] = None,
+) -> PipelineConfig:
+    """
+    Быстрая загрузка конфигурации pipeline
+
+    Args:
+        config_path: Путь к YAML файлу
+        environment: Окружение
+        base_path: Базовый путь для поиска файлов
+
+    Returns:
+        Объект PipelineConfig
+    """
+    loader = YAMLConfigLoader(
+        base_path=base_path,
+        environment=environment,
+    )
+    return loader.load_config(config_path)
 
 
-def validate_config_file(config_path: Union[str, Path]) -> List[str]:
-    """Быстрая валидация файла конфигурации"""
+def validate_pipeline_config(config_path: Union[str, Path]) -> Dict[str, Any]:
+    """
+    Валидация YAML файла конфигурации
+
+    Args:
+        config_path: Путь к файлу
+
+    Returns:
+        Результат валидации
+    """
     loader = YAMLConfigLoader()
     return loader.validate_config_file(config_path)
+
+
+def create_config_template(
+    output_path: Union[str, Path],
+    pipeline_name: str = "my-pipeline",
+    include_examples: bool = True,
+) -> None:
+    """
+    Создание template файла конфигурации
+
+    Args:
+        output_path: Путь для сохранения template
+        pipeline_name: Имя pipeline
+        include_examples: Включать ли примеры этапов
+    """
+    template_config = {
+        "pipeline": {
+            "name": pipeline_name,
+            "version": "1.0.0",
+            "description": f"Pipeline configuration for {pipeline_name}",
+            "metadata": {
+                "owner": "data-team@company.com",
+                "schedule": "0 6 * * *",  # Daily at 6 AM
+                "environment": "development",
+                "tags": ["example"],
+            },
+            "variables": {
+                "database_url": "${DATABASE_URL}",
+                "batch_size": 1000,
+            },
+            "stages": [],
+        }
+    }
+
+    if include_examples:
+        template_config["pipeline"]["stages"] = [
+            {
+                "name": "extract-data",
+                "component": "extractor/sql",
+                "description": "Extract data from source database",
+                "config": {
+                    "connection_string": "${database_url}",
+                    "query": "SELECT * FROM source_table",
+                    "output_format": "pandas",
+                },
+                "timeout": "10m",
+            },
+            {
+                "name": "transform-data",
+                "component": "transformer/pandas",
+                "description": "Transform and clean data",
+                "depends_on": ["extract-data"],
+                "config": {
+                    "script_path": "transforms/clean_data.py",
+                },
+                "timeout": "15m",
+            },
+            {
+                "name": "load-data",
+                "component": "loader/sql",
+                "description": "Load data to target system",
+                "depends_on": ["transform-data"],
+                "config": {
+                    "connection_string": "${warehouse_url}",
+                    "target_table": "processed_data",
+                    "write_mode": "append",
+                },
+                "timeout": "10m",
+            },
+        ]
+
+    output_path = Path(output_path)
+    with open(output_path, "w", encoding="utf-8") as f:
+        yaml.dump(
+            template_config,
+            f,
+            default_flow_style=False,
+            allow_unicode=True,
+            sort_keys=False,
+            indent=2,
+        )
+
+    logger.info("Pipeline configuration template created", path=str(output_path))

@@ -5,19 +5,31 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="d90b37a7-db67-4f24-90c0-c200d35a3ed1" name="Список изменений" comment="fix">
-      <change afterPath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/config/settings.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/.github/workflows/ci.yml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Makefile" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/examples/pipelines/customer-analytics-pipeline.yaml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/packages/components/loaders/loaders_sql/src/loaders_sql/components.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/packages/components/transformers/transformer-pandas/src/transformer_pandas/components.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/pipeline-framework.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/pipeline-framework.iml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/extractors/extractor_sql/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/packages/components/extractors/extractor_sql/README.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/packages/components/extractors/extractor_sql/pyproject.toml" beforeDir="false" afterPath="$PROJECT_DIR$/packages/components/extractors/extractor_sql/pyproject.toml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/packages/components/extractors/extractor_sql/src/extractor_sql/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/packages/components/extractors/extractor_sql/src/extractor_sql/__init__.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/packages/components/extractors/extractor_sql/src/extractor_sql/components.py" beforeDir="false" afterPath="$PROJECT_DIR$/packages/components/extractors/extractor_sql/src/extractor_sql/components.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/packages/components/extractors/extractor_sql/src/extractor_sql/exceptions.py" beforeDir="false" afterPath="$PROJECT_DIR$/packages/components/extractors/extractor_sql/src/extractor_sql/exceptions.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/packages/components/extractors/extractor_sql/src/extractor_sql/utils.py" beforeDir="false" afterPath="$PROJECT_DIR$/packages/components/extractors/extractor_sql/src/extractor_sql/utils.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/packages/components/extractors/extractor_sql/tests/conftest.py" beforeDir="false" afterPath="$PROJECT_DIR$/packages/components/extractors/extractor_sql/tests/conftest.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/packages/components/extractors/extractor_sql/tests/test_components.py" beforeDir="false" afterPath="$PROJECT_DIR$/packages/components/extractors/extractor_sql/tests/test_components.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/__init__.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/cli/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/cli/main.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/components/base.py" beforeDir="false" afterPath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/components/base.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/config/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/config/__init__.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/config/models.py" beforeDir="false" afterPath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/config/models.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/config/settings.py" beforeDir="false" afterPath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/config/settings.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/config/yaml_loader.py" beforeDir="false" afterPath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/config/yaml_loader.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/registry/component_registry.py" beforeDir="false" afterPath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/registry/component_registry.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/temporal/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/packages/pipeline-core/src/pipeline_core/temporal/__init__.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/pyproject.toml" beforeDir="false" afterPath="$PROJECT_DIR$/pyproject.toml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/uv.lock" beforeDir="false" afterPath="$PROJECT_DIR$/uv.lock" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -40,12 +52,12 @@
     &quot;assignee&quot;: &quot;Neko1313&quot;
   }
 }</component>
-  <component name="GithubPullRequestsUISettings">{
-  &quot;selectedUrlAndAccountId&quot;: {
-    &quot;url&quot;: &quot;https://github.com/Neko1313/pipeline-framework.git&quot;,
-    &quot;accountId&quot;: &quot;42d3d507-78da-4010-8e47-ddf1f840515a&quot;
+  <component name="GithubPullRequestsUISettings"><![CDATA[{
+  "selectedUrlAndAccountId": {
+    "url": "git@github.com:Neko1313/pipeline-framework.git",
+    "accountId": "b61a4f8e-30e8-4149-b590-b9528e0c1f56"
   }
-}</component>
+}]]></component>
   <component name="ProjectColorInfo">{
   &quot;associatedIndex&quot;: 0
 }</component>
@@ -54,23 +66,23 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent"><![CDATA[{
-  "keyToString": {
-    "RunOnceActivity.ShowReadmeOnStart": "true",
-    "RunOnceActivity.git.unshallow": "true",
-    "SONARLINT_PRECOMMIT_ANALYSIS": "true",
-    "dart.analysis.tool.window.visible": "false",
-    "git-widget-placeholder": "main",
-    "last_opened_file_path": "/home/neko/project/pipeline-framework",
-    "node.js.detected.package.eslint": "true",
-    "node.js.detected.package.tslint": "true",
-    "node.js.selected.package.eslint": "(autodetect)",
-    "node.js.selected.package.tslint": "(autodetect)",
-    "nodejs_package_manager_path": "npm",
-    "settings.editor.selected.configurable": "preferences.pluginManager",
-    "vue.rearranger.settings.migration": "true"
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;SONARLINT_PRECOMMIT_ANALYSIS&quot;: &quot;true&quot;,
+    &quot;dart.analysis.tool.window.visible&quot;: &quot;false&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;main&quot;,
+    &quot;last_opened_file_path&quot;: &quot;/home/neko/project/pipeline-framework&quot;,
+    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
+    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
+    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;preferences.pluginManager&quot;,
+    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
   }
-}]]></component>
+}</component>
   <component name="RecentsManager">
     <key name="MoveFile.RECENT_KEYS">
       <recent name="$PROJECT_DIR$/packages/components/extractors/extractor_sql" />
@@ -95,7 +107,8 @@
       <workItem from="1750198547156" duration="2885000" />
       <workItem from="1750204391509" duration="11000" />
       <workItem from="1750225811857" duration="2242000" />
-      <workItem from="1750389532203" duration="13315000" />
+      <workItem from="1750389532203" duration="13655000" />
+      <workItem from="1750556988489" duration="3053000" />
     </task>
     <task id="LOCAL-00001" summary="fix">
       <option name="closed" value="true" />
@@ -121,7 +134,15 @@
       <option name="project" value="LOCAL" />
       <updated>1750458939749</updated>
     </task>
-    <option name="localTasksCounter" value="4" />
+    <task id="LOCAL-00004" summary="fix">
+      <option name="closed" value="true" />
+      <created>1750461115191</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1750461115191</updated>
+    </task>
+    <option name="localTasksCounter" value="5" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">

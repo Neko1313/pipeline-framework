@@ -1,0 +1,360 @@
+pipeline:
+  name: "customer-analytics-pipeline"
+  version: "1.2.0"
+  description: "Customer data processing and analytics pipeline"
+
+  metadata:
+    owner: "data-team@company.com"
+    schedule: "0 2 * * *"  # Daily at 2 AM
+    environment: "production"
+    tags:
+      - "analytics"
+      - "customers"
+      - "daily"
+
+    # SLA настройки
+    sla:
+      max_duration_minutes: 120
+      alert_on_failure: true
+      alert_recipients: ["data-team@company.com", "ops@company.com"]
+
+    # Настройки мониторинга
+    monitoring:
+      metrics_enabled: true
+      log_level: "INFO"
+      heartbeat_interval: 30
+
+  # Глобальные переменные
+  variables:
+    database_url: "${DATABASE_URL}"
+    warehouse_url: "${WAREHOUSE_URL}"
+    batch_size: 10000
+    yesterday: "{{ ds }}"  # Airflow template variable
+
+  # Настройки retry по умолчанию
+  default_retry_policy:
+    maximum_attempts: 3
+    initial_interval: "30s"
+    backoff_coefficient: 2.0
+    maximum_interval: "5m"
+    non_retryable_error_types:
+      - "ConfigurationError"
+      - "AuthenticationError"
+
+  # Этапы pipeline
+  stages:
+    # 1. Извлечение данных из источников
+    - name: "extract-customers"
+      component: "extractor/sql"
+      description: "Extract customer data from main database"
+
+      config:
+        connection_string: "${database_url}"
+        query: |
+          SELECT 
+            customer_id,
+            email,
+            first_name,
+            last_name,
+            phone,
+            registration_date,
+            last_login,
+            total_orders,
+            total_spent,
+            customer_segment,
+            is_active,
+            updated_at
+          FROM customers 
+          WHERE updated_at > :last_run_date
+            AND is_deleted = false
+        parameters:
+          last_run_date: "{{ yesterday }}"
+        output_format: "pandas"
+        fetch_size: "${batch_size}"
+
+      retry_policy:
+        maximum_attempts: 3
+        initial_interval: "1m"
+
+      timeout: "10m"
+
+      # Качественные проверки
+      quality_checks:
+        - name: "row_count_check"
+          type: "count_validator"
+          config:
+            min_rows: 100
+            max_rows: 1000000
+
+        - name: "data_freshness"
+          type: "freshness_validator"
+          config:
+            column: "updated_at"
+            max_age_hours: 25
+
+    # 2. Извлечение данных о заказах
+    - name: "extract-orders"
+      component: "extractor/sql"
+      description: "Extract recent orders data"
+      depends_on: []  # Может выполняться параллельно
+
+      config:
+        connection_string: "${database_url}"
+        query: |
+          SELECT 
+            order_id,
+            customer_id,
+            order_date,
+            order_status,
+            order_total,
+            payment_method,
+            shipping_address,
+            created_at,
+            updated_at
+          FROM orders
+          WHERE order_date >= :start_date
+            AND order_status != 'cancelled'
+        parameters:
+          start_date: "{{ yesterday }}"
+        output_format: "pandas"
+
+      timeout: "15m"
+
+    # 3. Валидация данных
+    - name: "validate-customer-data"
+      component: "validator/schema"
+      description: "Validate customer data schema and quality"
+      depends_on: ["extract-customers"]
+
+      config:
+        schema_path: "schemas/customer_schema.json"
+        validation_rules:
+          - column: "email"
+            rule: "email_format"
+          - column: "customer_id"
+            rule: "not_null"
+          - column: "total_spent"
+            rule: "non_negative"
+        fail_on_error: true
+
+      timeout: "5m"
+
+    # 4. Трансформация данных
+    - name: "transform-customer-analytics"
+      component: "transformer/pandas"
+      description: "Calculate customer analytics metrics"
+      depends_on: ["validate-customer-data", "extract-orders"]
+
+      config:
+        script_path: "transforms/customer_analytics.py"
+        script_content: |
+          import pandas as pd
+          import numpy as np
+          from datetime import datetime
+          
+          def transform(customers_df, orders_df):
+              # Расчет метрик клиентов
+              order_metrics = orders_df.groupby('customer_id').agg({
+                  'order_total': ['sum', 'mean', 'count'],
+                  'order_date': ['min', 'max']
+              }).round(2)
+              
+              # Flatten column names
+              order_metrics.columns = ['_'.join(col).strip() for col in order_metrics.columns]
+              
+              # Join с данными клиентов
+              result = customers_df.merge(
+                  order_metrics, 
+                  left_on='customer_id', 
+                  right_index=True, 
+                  how='left'
+              )
+              
+              # Расчет дополнительных метрик
+              result['days_since_last_order'] = (
+                  pd.Timestamp.now() - pd.to_datetime(result['order_date_max'])
+              ).dt.days
+              
+              result['avg_order_value'] = result['order_total_mean'].fillna(0)
+              result['customer_lifetime_value'] = result['order_total_sum'].fillna(0)
+              
+              # Сегментация клиентов
+              result['rfm_segment'] = calculate_rfm_segment(result)
+              
+              return result
+              
+          def calculate_rfm_segment(df):
+              # Simplified RFM segmentation
+              conditions = [
+                  (df['days_since_last_order'] <= 30) & (df['customer_lifetime_value'] >= 1000),
+                  (df['days_since_last_order'] <= 60) & (df['customer_lifetime_value'] >= 500),
+                  (df['days_since_last_order'] <= 90),
+              ]
+              
+              choices = ['high_value', 'medium_value', 'low_value']
+              
+              return np.select(conditions, choices, default='inactive')
+
+        memory_limit_mb: 2048
+
+      parallel:
+        enabled: true
+        max_workers: 4
+        chunk_size: 5000
+
+      retry_policy:
+        maximum_attempts: 2
+        initial_interval: "1m"
+
+      timeout: "30m"
+
+    # 5. Обогащение данных
+    - name: "enrich-geo-data"
+      component: "extractor/api"
+      description: "Enrich customer data with geographic information"
+      depends_on: ["transform-customer-analytics"]
+
+      config:
+        api_endpoint: "https://api.geocoding.service/batch"
+        auth_method: "api_key"
+        api_key: "${GEO_API_KEY}"
+        batch_size: 100
+        rate_limit: 10  # requests per second
+
+        request_mapping:
+          address_field: "shipping_address"
+          output_fields: ["latitude", "longitude", "city", "state", "country"]
+
+      timeout: "20m"
+
+      # Обработка ошибок API
+      error_handling:
+        on_api_error: "skip"  # skip, fail, default_value
+        default_values:
+          latitude: null
+          longitude: null
+          city: "Unknown"
+
+    # 6. Загрузка в хранилище данных
+    - name: "load-to-warehouse"
+      component: "loader/sql"
+      description: "Load processed data to data warehouse"
+      depends_on: ["enrich-geo-data"]
+
+      config:
+        connection_string: "${warehouse_url}"
+        target_table: "analytics.customer_metrics"
+        write_mode: "upsert"
+        upsert_keys: ["customer_id"]
+
+        # Создание таблицы если не существует
+        create_table_if_not_exists: true
+        table_schema:
+          customer_id: "BIGINT PRIMARY KEY"
+          email: "VARCHAR(255)"
+          first_name: "VARCHAR(100)"
+          last_name: "VARCHAR(100)"
+          customer_lifetime_value: "DECIMAL(10,2)"
+          avg_order_value: "DECIMAL(8,2)"
+          rfm_segment: "VARCHAR(50)"
+          latitude: "DECIMAL(10,7)"
+          longitude: "DECIMAL(10,7)"
+          updated_at: "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+
+        # Партиционирование
+        partition_by: "DATE_TRUNC('month', updated_at)"
+
+      retry_policy:
+        maximum_attempts: 3
+        initial_interval: "1m"
+        backoff_coefficient: 1.5
+
+      timeout: "15m"
+
+    # 7. Обновление метрик в кэше
+    - name: "update-metrics-cache"
+      component: "loader/redis"
+      description: "Update real-time metrics cache"
+      depends_on: ["load-to-warehouse"]
+
+      config:
+        redis_url: "${REDIS_URL}"
+        key_prefix: "customer_metrics:"
+        ttl_seconds: 86400  # 24 hours
+
+        metrics_to_cache:
+          - key: "total_customers"
+            query: "SELECT COUNT(*) FROM analytics.customer_metrics"
+          - key: "avg_ltv"
+            query: "SELECT AVG(customer_lifetime_value) FROM analytics.customer_metrics"
+          - key: "high_value_customers"
+            query: "SELECT COUNT(*) FROM analytics.customer_metrics WHERE rfm_segment = 'high_value'"
+
+      timeout: "5m"
+
+  # Глобальные проверки качества
+  quality_checks:
+    - name: "pipeline-data-freshness"
+      type: "freshness_validator"
+      applies_to: ["load-to-warehouse"]
+      config:
+        max_age_hours: 2
+
+    - name: "pipeline-row-count"
+      type: "count_validator"
+      applies_to: ["load-to-warehouse"]
+      config:
+        min_rows: 1000
+        max_deviation_percent: 10  # Compared to previous runs
+
+  # Настройки алертов
+  alerts:
+    - name: "pipeline-failure"
+      condition: "status == 'failed'"
+      channels: ["email", "slack"]
+      recipients: ["data-team@company.com"]
+
+    - name: "quality-check-failure"
+      condition: "quality_checks.failed > 0"
+      channels: ["slack"]
+
+    - name: "duration-exceeded"
+      condition: "duration > sla.max_duration_minutes"
+      channels: ["email"]
+
+  # Настройки для разных окружений
+  environments:
+    development:
+      variables:
+        batch_size: 1000
+      default_retry_policy:
+        maximum_attempts: 1
+      monitoring:
+        log_level: "DEBUG"
+
+    staging:
+      variables:
+        batch_size: 5000
+      alerts:
+        enabled: false
+
+    production:
+      variables:
+        batch_size: 10000
+      monitoring:
+        metrics_enabled: true
+        alert_on_failure: true
+
+  # Настройки Temporal Workflow
+  temporal:
+    workflow_id_template: "customer-analytics-{date}-{run_id}"
+    task_queue: "data-pipeline-queue"
+    workflow_timeout: "2h"
+    activity_timeout: "30m"
+
+    # Retry policy для Activities
+    activity_retry_policy:
+      initial_interval: "1s"
+      maximum_interval: "1m"
+      maximum_attempts: 3
+      backoff_coefficient: 2.0

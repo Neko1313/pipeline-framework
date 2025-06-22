@@ -1,101 +1,160 @@
 # packages/components/extractors/extractor_sql/src/extractor_sql/utils.py
 
 """
-Утилиты для SQL Extractor
+Утилитарные функции для SQL Extractor
 
-Этот модуль содержит вспомогательные функции для работы с SQL extraction,
-включая работу с connection strings, оптимизацию запросов, обработку данных и т.д.
+Включает:
+- Построение и валидация connection strings
+- Парсинг параметров подключения
+- Санитизация SQL запросов
+- Оптимизация запросов для извлечения данных
+- Работа с pandas DataFrame
+- Оценка стоимости запросов
 """
 
-import hashlib
-from pathlib import Path
+from collections.abc import Iterator
+import math
 import re
 from typing import Any
-from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
-import warnings
+from urllib.parse import parse_qs, urlparse
 
-import numpy as np
 import pandas as pd
 import structlog
 
 logger = structlog.get_logger(__name__)
 
 
-# ================================
-# Connection String Utilities
-# ================================
-
-
 def build_connection_string(
     dialect: str,
-    username: str,
-    password: str,
-    host: str,
+    driver: str | None = None,
+    username: str | None = None,
+    password: str | None = None,
+    host: str | None = None,
     port: int | None = None,
     database: str | None = None,
-    driver: str | None = None,
-    **kwargs,
+    **query_params: Any,
 ) -> str:
     """
-    Построение connection string для базы данных
+    Построение строки подключения к БД
 
     Args:
-        dialect: Диалект БД (postgresql, mysql, sqlite и т.д.)
+        dialect: Диалект БД (postgresql, mysql, sqlite, etc.)
+        driver: Драйвер (asyncpg, aiomysql, aiosqlite, etc.)
         username: Имя пользователя
         password: Пароль
-        host: Хост базы данных
-        port: Порт (опционально)
-        database: Название базы данных
-        driver: Драйвер (опционально)
-        **kwargs: Дополнительные параметры соединения
+        host: Хост
+        port: Порт
+        database: Имя базы данных
+        **query_params: Дополнительные параметры
 
     Returns:
-        Сформированный connection string
+        Строка подключения в формате SQLAlchemy URL
 
     Example:
-        >>> build_connection_string(
-        ...     dialect="postgresql",
-        ...     username="user",
-        ...     password="pass",
-        ...     host="localhost",
-        ...     port=5432,
-        ...     database="mydb",
-        ...     driver="asyncpg"
-        ... )
+        >>> build_connection_string("postgresql", "asyncpg", "user", "pass", "localhost", 5432, "mydb")
         'postgresql+asyncpg://user:pass@localhost:5432/mydb'
     """
-    # Обработка специальных случаев
-    if dialect == "sqlite":
-        if database:
-            return f"sqlite+aiosqlite:///{database}"
-        else:
-            return "sqlite+aiosqlite:///:memory:"
 
     # Схема с драйвером
-    scheme = f"{dialect}+{driver}" if driver else dialect
+    scheme = dialect
+    if driver:
+        scheme = f"{dialect}+{driver}"
 
-    # Базовая часть URL
-    netloc = f"{username}:{password}@{host}"
-    if port:
-        netloc += f":{port}"
+    # Для SQLite особый формат
+    if dialect.lower() == "sqlite":
+        if database == ":memory:":
+            return f"{scheme}:///:memory:"
+        else:
+            return f"{scheme}:///{database or ''}"
 
-    # Путь (база данных)
-    path = f"/{database}" if database else ""
+    # Для остальных БД стандартный формат
+    connection_parts = [f"{scheme}://"]
 
-    # Параметры запроса
-    query_params = {}
-    for key, value in kwargs.items():
-        if value is not None:
-            query_params[key] = str(value)
+    # Credentials
+    if username:
+        auth = username
+        if password:
+            auth = f"{username}:{password}"
+        connection_parts.append(f"{auth}@")
 
-    query = urlencode(query_params) if query_params else ""
+    # Host:port
+    if host:
+        host_part = host
+        if port:
+            host_part = f"{host}:{port}"
+        connection_parts.append(host_part)
 
-    return urlunparse((scheme, netloc, path, "", query, ""))
+    # Database
+    if database:
+        connection_parts.append(f"/{database}")
+
+    # Query parameters
+    if query_params:
+        query_string = "&".join(f"{k}={v}" for k, v in query_params.items())
+        connection_parts.append(f"?{query_string}")
+
+    return "".join(connection_parts)
+
+
+def validate_connection_string(connection_string: str) -> bool:
+    """
+    Валидация строки подключения
+
+    Args:
+        connection_string: Строка подключения
+
+    Returns:
+        True если строка валидна, False иначе
+
+    Example:
+        >>> validate_connection_string("postgresql://user:pass@localhost/db")
+        True
+        >>> validate_connection_string("invalid_string")
+        False
+    """
+    try:
+        parsed = urlparse(connection_string)
+
+        # Проверяем наличие схемы
+        if not parsed.scheme:
+            return False
+
+        # Поддерживаемые схемы
+        supported_schemes = {
+            "postgresql",
+            "postgres",
+            "mysql",
+            "sqlite",
+            "oracle",
+            "mssql",
+            "sqlserver",
+            "snowflake",
+            "bigquery",
+        }
+
+        # Извлекаем базовый диалект (до знака +)
+        base_scheme = parsed.scheme.split("+")[0].lower()
+
+        if base_scheme not in supported_schemes:
+            return False
+
+        # Для SQLite дополнительные проверки
+        if base_scheme == "sqlite":
+            return True  # SQLite имеет особый формат
+
+        # Для остальных БД проверяем наличие хоста (кроме некоторых случаев)
+        if base_scheme not in ["bigquery"] and not parsed.hostname:
+            return False
+
+        return True
+
+    except Exception:
+        return False
 
 
 def parse_connection_params(connection_string: str) -> dict[str, Any]:
     """
-    Разбор connection string на составные части
+    Парсинг параметров из строки подключения
 
     Args:
         connection_string: Строка подключения
@@ -104,32 +163,28 @@ def parse_connection_params(connection_string: str) -> dict[str, Any]:
         Словарь с параметрами подключения
 
     Example:
-        >>> parse_connection_params("postgresql+asyncpg://user:pass@localhost:5432/mydb?sslmode=require")
-        {
-            'dialect': 'postgresql',
-            'driver': 'asyncpg',
-            'username': 'user',
-            'password': 'pass',
-            'host': 'localhost',
-            'port': 5432,
-            'database': 'mydb',
-            'params': {'sslmode': 'require'}
-        }
+        >>> params = parse_connection_params("postgresql+asyncpg://user:pass@localhost:5432/db?sslmode=require")
+        >>> params["dialect"]
+        'postgresql'
+        >>> params["driver"]
+        'asyncpg'
     """
     parsed = urlparse(connection_string)
 
-    # Разбираем схему на диалект и драйвер
-    scheme_parts = parsed.scheme.split("+", 1)
+    # Парсим схему и драйвер
+    scheme_parts = parsed.scheme.split("+")
     dialect = scheme_parts[0]
     driver = scheme_parts[1] if len(scheme_parts) > 1 else None
 
-    # Разбираем параметры запроса
-    params = {}
+    # Парсим query параметры
+    query_params = {}
     if parsed.query:
-        for key, values in parse_qs(parsed.query).items():
-            params[key] = values[0] if len(values) == 1 else values
+        query_params = {
+            k: v[0] if isinstance(v, list) else v
+            for k, v in parse_qs(parsed.query).items()
+        }
 
-    result = {
+    return {
         "dialect": dialect,
         "driver": driver,
         "username": parsed.username,
@@ -137,495 +192,525 @@ def parse_connection_params(connection_string: str) -> dict[str, Any]:
         "host": parsed.hostname,
         "port": parsed.port,
         "database": parsed.path.lstrip("/") if parsed.path else None,
-        "params": params,
+        "query_params": query_params,
     }
-
-    return result
-
-
-def validate_connection_string(connection_string: str) -> tuple[bool, str | None]:
-    """
-    Валидация connection string
-
-    Args:
-        connection_string: Строка подключения для проверки
-
-    Returns:
-        Кортеж (is_valid, error_message)
-
-    Example:
-        >>> validate_connection_string("postgresql://user:pass@localhost/db")
-        (True, None)
-        >>> validate_connection_string("invalid://")
-        (False, "Invalid connection string format")
-    """
-    try:
-        parsed = urlparse(connection_string)
-
-        # Проверяем наличие схемы
-        if not parsed.scheme:
-            return False, "Missing database scheme"
-
-        # Проверяем поддерживаемые диалекты
-        supported_dialects = [
-            "postgresql",
-            "mysql",
-            "sqlite",
-            "oracle",
-            "mssql",
-            "snowflake",
-            "bigquery",
-        ]
-
-        dialect = parsed.scheme.split("+")[0]
-        if dialect not in supported_dialects:
-            return False, f"Unsupported database dialect: {dialect}"
-
-        # Специальная проверка для SQLite
-        if dialect == "sqlite":
-            return True, None
-
-        # Для остальных БД проверяем наличие хоста
-        if not parsed.hostname:
-            return False, "Missing database host"
-
-        return True, None
-
-    except Exception as e:
-        return False, f"Invalid connection string format: {e}"
-
-
-def mask_connection_string(connection_string: str) -> str:
-    """
-    Маскирование чувствительной информации в connection string
-
-    Args:
-        connection_string: Исходная строка подключения
-
-    Returns:
-        Строка подключения с замаскированным паролем
-
-    Example:
-        >>> mask_connection_string("postgresql://user:secret@localhost/db")
-        'postgresql://user:***@localhost/db'
-    """
-    return re.sub(r"://([^:]+):([^@]+)@", r"://\1:***@", connection_string)
-
-
-# ================================
-# Query Utilities
-# ================================
 
 
 def sanitize_query(query: str) -> str:
     """
-    Базовая санитизация SQL запроса
+    Санитизация SQL запроса
 
     Args:
-        query: SQL запрос для санитизации
+        query: SQL запрос
 
     Returns:
         Санитизированный запрос
 
-    Note:
-        Это базовая проверка. Для production использования рекомендуется
-        более продвинутые инструменты SQL санитизации.
+    Example:
+        >>> sanitize_query("SELECT * FROM users /* comment */ -- line comment")
+        'SELECT * FROM users   '
     """
+    if not query:
+        return ""
+
+    sanitized = query.strip()
+
+    # Удаляем SQL комментарии
+    # Удаляем многострочные комментарии /* ... */
+    sanitized = re.sub(r"/\*.*?\*/", "", sanitized, flags=re.DOTALL)
+
+    # Удаляем однострочные комментарии --
+    sanitized = re.sub(r"--.*?$", "", sanitized, flags=re.MULTILINE)
+
     # Удаляем лишние пробелы
-    query = re.sub(r"\s+", " ", query.strip())
+    sanitized = re.sub(r"\s+", " ", sanitized).strip()
 
-    # Проверяем на подозрительные паттерны
-    dangerous_patterns = [
-        r";\s*(DROP|DELETE|TRUNCATE|UPDATE|INSERT|ALTER)",
-        r"UNION\s+SELECT",
-        r"--",  # SQL комментарии
-        r"/\*.*?\*/",  # Блочные комментарии
-    ]
+    return sanitized
 
-    for pattern in dangerous_patterns:
-        if re.search(pattern, query, re.IGNORECASE):
-            warnings.warn(
-                f"Potentially dangerous SQL pattern detected: {pattern}",
-                UserWarning,
-                stacklevel=2,
-            )
 
-    return query
+def optimize_query_for_extraction(query: str, fetch_size: int | None = None) -> str:
+    """
+    Оптимизация SQL запроса для извлечения данных
+
+    Args:
+        query: Исходный SQL запрос
+        fetch_size: Размер выборки (для добавления LIMIT если нужно)
+
+    Returns:
+        Оптимизированный запрос
+
+    Example:
+        >>> optimize_query_for_extraction("SELECT * FROM users", 1000)
+        'SELECT * FROM users'
+    """
+    if not query:
+        return ""
+
+    optimized = query.strip()
+
+    # Для простоты пока возвращаем исходный запрос
+    # В будущем здесь можно добавить:
+    # - Анализ плана выполнения
+    # - Добавление подсказок для оптимизатора
+    # - Автоматическое добавление индексов
+    # - Партиционирование больших запросов
+
+    logger.debug(
+        "Query optimization completed",
+        original_length=len(query),
+        optimized_length=len(optimized),
+    )
+
+    return optimized
+
+
+def infer_pandas_dtypes(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Автоматическое определение и оптимизация типов данных pandas DataFrame
+
+    Args:
+        df: Исходный DataFrame
+
+    Returns:
+        DataFrame с оптимизированными типами данных
+
+    Example:
+        >>> df = pd.DataFrame({"id": ["1", "2", "3"], "active": ["true", "false", "true"]})
+        >>> optimized_df = infer_pandas_dtypes(df)
+        >>> optimized_df["id"].dtype
+        dtype('int64')
+    """
+    if df.empty:
+        return df
+
+    optimized_df = df.copy()
+
+    for column in optimized_df.columns:
+        col_data = optimized_df[column]
+
+        # Пропускаем колонки с только NaN значениями
+        if col_data.isna().all():
+            continue
+
+        # Пытаемся конвертировать в числовые типы
+        try:
+            # Проверяем на целые числа
+            if col_data.dtype == "object":
+                # Убираем NaN для проверки
+                non_null_data = col_data.dropna()
+
+                # Пытаемся конвертировать в int
+                try:
+                    converted_int = pd.to_numeric(non_null_data, errors="raise")
+                    if (converted_int == converted_int.astype(int)).all():
+                        optimized_df[column] = pd.to_numeric(
+                            col_data, errors="coerce"
+                        ).astype("Int64")
+                        continue
+                except (ValueError, TypeError):
+                    pass
+
+                # Пытаемся конвертировать в float
+                try:
+                    optimized_df[column] = pd.to_numeric(col_data, errors="coerce")
+                    continue
+                except (ValueError, TypeError):
+                    pass
+
+                # Пытаемся конвертировать в bool
+                if set(non_null_data.str.lower().unique()).issubset(
+                    {"true", "false", "1", "0", "yes", "no"}
+                ):
+                    bool_map = {
+                        "true": True,
+                        "false": False,
+                        "1": True,
+                        "0": False,
+                        "yes": True,
+                        "no": False,
+                    }
+                    optimized_df[column] = col_data.str.lower().map(bool_map)
+                    continue
+
+                # Пытаемся конвертировать в datetime
+                try:
+                    optimized_df[column] = pd.to_datetime(col_data, errors="raise")
+                    continue
+                except (ValueError, TypeError):
+                    pass
+
+        except Exception as e:
+            logger.debug(f"Failed to infer dtype for column {column}: {e}")
+            continue
+
+    return optimized_df
+
+
+def optimize_dataframe_memory(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Оптимизация использования памяти DataFrame
+
+    Args:
+        df: Исходный DataFrame
+
+    Returns:
+        DataFrame с оптимизированным использованием памяти
+
+    Example:
+        >>> df = pd.DataFrame({"small_int": [1, 2, 3], "category": ["A", "B", "A"]})
+        >>> optimized_df = optimize_dataframe_memory(df)
+        >>> optimized_df.memory_usage(deep=True).sum() <= df.memory_usage(deep=True).sum()
+        True
+    """
+    if df.empty:
+        return df
+
+    optimized_df = df.copy()
+
+    for column in optimized_df.columns:
+        col_data = optimized_df[column]
+        col_type = col_data.dtype
+
+        try:
+            # Оптимизация целых чисел
+            if pd.api.types.is_integer_dtype(col_type):
+                col_min = col_data.min()
+                col_max = col_data.max()
+
+                if col_min >= 0:  # Беззнаковые типы
+                    if col_max < 256:
+                        optimized_df[column] = col_data.astype("uint8")
+                    elif col_max < 65536:
+                        optimized_df[column] = col_data.astype("uint16")
+                    elif col_max < 4294967296:
+                        optimized_df[column] = col_data.astype("uint32")
+                else:  # Знаковые типы
+                    if col_min > -128 and col_max < 128:
+                        optimized_df[column] = col_data.astype("int8")
+                    elif col_min > -32768 and col_max < 32768:
+                        optimized_df[column] = col_data.astype("int16")
+                    elif col_min > -2147483648 and col_max < 2147483648:
+                        optimized_df[column] = col_data.astype("int32")
+
+            # Оптимизация float
+            elif pd.api.types.is_float_dtype(col_type):
+                if col_type == "float64":
+                    # Проверяем, можно ли безопасно конвертировать в float32
+                    if (
+                        col_data.isna() | (col_data == col_data.astype("float32"))
+                    ).all():
+                        optimized_df[column] = col_data.astype("float32")
+
+            # Оптимизация строк
+            elif pd.api.types.is_object_dtype(col_type):
+                # Проверяем на категориальные данные
+                unique_count = col_data.nunique()
+                total_count = len(col_data)
+
+                # Если уникальных значений меньше 50% от общего количества, конвертируем в category
+                if unique_count / total_count < 0.5 and unique_count > 1:
+                    optimized_df[column] = col_data.astype("category")
+
+        except Exception as e:
+            logger.debug(f"Failed to optimize memory for column {column}: {e}")
+            continue
+
+    return optimized_df
+
+
+def split_dataframe_chunks(df: pd.DataFrame, chunk_size: int) -> Iterator[pd.DataFrame]:
+    """
+    Разбиение DataFrame на чанки
+
+    Args:
+        df: Исходный DataFrame
+        chunk_size: Размер чанка
+
+    Yields:
+        Чанки DataFrame
+
+    Example:
+        >>> df = pd.DataFrame({"id": range(100), "value": range(100)})
+        >>> chunks = list(split_dataframe_chunks(df, 25))
+        >>> len(chunks)
+        4
+        >>> len(chunks[0])
+        25
+    """
+    if df.empty or chunk_size <= 0:
+        return
+
+    num_chunks = math.ceil(len(df) / chunk_size)
+
+    for i in range(num_chunks):
+        start_idx = i * chunk_size
+        end_idx = min((i + 1) * chunk_size, len(df))
+
+        chunk = df.iloc[start_idx:end_idx].copy()
+        yield chunk
 
 
 def estimate_query_cost(query: str) -> dict[str, Any]:
     """
-    Примерная оценка стоимости выполнения запроса
-
-    Args:
-        query: SQL запрос для анализа
-
-    Returns:
-        Словарь с оценками сложности запроса
-
-    Note:
-        Это упрощенная эвристическая оценка.
-        Для точной оценки используйте EXPLAIN ANALYZE в конкретной БД.
-    """
-    query_upper = query.upper()
-
-    # Подсчет различных элементов запроса
-    join_count = len(re.findall(r"\bJOIN\b", query_upper))
-    subquery_count = len(re.findall(r"\(\s*SELECT", query_upper))
-    aggregate_count = len(
-        re.findall(r"\b(COUNT|SUM|AVG|MIN|MAX|GROUP BY)\b", query_upper)
-    )
-
-    # Оценка сложности
-    complexity_score = 0
-    complexity_score += join_count * 2  # JOINы увеличивают сложность
-    complexity_score += subquery_count * 3  # Подзапросы еще больше
-    complexity_score += aggregate_count * 1  # Агрегации умеренно сложные
-
-    # Определение категории сложности
-    if complexity_score == 0:
-        complexity = "simple"
-    elif complexity_score <= 5:
-        complexity = "moderate"
-    elif complexity_score <= 10:
-        complexity = "complex"
-    else:
-        complexity = "very_complex"
-
-    return {
-        "complexity": complexity,
-        "complexity_score": complexity_score,
-        "join_count": join_count,
-        "subquery_count": subquery_count,
-        "aggregate_count": aggregate_count,
-        "estimated_time_category": "fast" if complexity_score <= 3 else "slow",
-    }
-
-
-def optimize_query_for_extraction(
-    query: str,
-    limit: int | None = None,
-    offset: int | None = None,
-    add_order_by: bool = True,
-) -> str:
-    """
-    Оптимизация запроса для извлечения данных
-
-    Args:
-        query: Исходный SQL запрос
-        limit: Лимит записей (если нужен)
-        offset: Смещение записей (если нужен)
-        add_order_by: Добавлять ли ORDER BY для детерминированного порядка
-
-    Returns:
-        Оптимизированный запрос
-    """
-    query = query.strip()
-
-    # Удаляем существующий LIMIT/OFFSET если есть
-    query = re.sub(r"\bLIMIT\s+\d+", "", query, flags=re.IGNORECASE)
-    query = re.sub(r"\bOFFSET\s+\d+", "", query, flags=re.IGNORECASE)
-
-    # Добавляем ORDER BY если нет и требуется
-    if add_order_by and not re.search(r"\bORDER\s+BY\b", query, re.IGNORECASE):
-        # Попытка найти первичный ключ или похожую колонку
-        if re.search(r"\bSELECT\s+\*\s+FROM\s+(\w+)", query, re.IGNORECASE):
-            # Если SELECT *, добавляем ORDER BY по первой колонке
-            query += " ORDER BY 1"
-        elif "id" in query.lower():
-            query += " ORDER BY id"
-
-    # Добавляем LIMIT и OFFSET если нужно
-    if limit is not None:
-        query += f" LIMIT {limit}"
-
-    if offset is not None:
-        query += f" OFFSET {offset}"
-
-    return query
-
-
-def generate_query_hash(query: str, parameters: dict[str, Any] | None = None) -> str:
-    """
-    Генерация хеша для SQL запроса с параметрами
+    Оценка стоимости выполнения SQL запроса
 
     Args:
         query: SQL запрос
-        parameters: Параметры запроса
 
     Returns:
-        MD5 хеш запроса и параметров
+        Словарь с оценкой стоимости
+
+    Example:
+        >>> cost = estimate_query_cost("SELECT * FROM users WHERE id = 1")
+        >>> "complexity_score" in cost
+        True
     """
-    # Нормализуем запрос (убираем лишние пробелы, приводим к lower case)
-    normalized_query = re.sub(r"\s+", " ", query.strip().lower())
+    if not query:
+        return {
+            "complexity_score": 0,
+            "estimated_rows": 0,
+            "performance_hints": [],
+            "risk_factors": [],
+        }
 
-    # Добавляем параметры к строке для хеширования
-    hash_string = normalized_query
-    if parameters:
-        # Сортируем параметры для детерминированности
-        sorted_params = sorted(parameters.items())
-        params_str = str(sorted_params)
-        hash_string += f"|{params_str}"
+    query_upper = query.upper().strip()
 
-    return hashlib.md5(hash_string.encode()).hexdigest()
+    # Базовый анализ сложности
+    complexity_score = 0
+    performance_hints = []
+    risk_factors = []
+    estimated_rows = 1
+
+    # Ключевые слова, увеличивающие сложность
+    complexity_keywords = {
+        "JOIN": 2,
+        "LEFT JOIN": 2,
+        "RIGHT JOIN": 2,
+        "INNER JOIN": 2,
+        "OUTER JOIN": 3,
+        "UNION": 3,
+        "UNION ALL": 2,
+        "SUBQUERY": 3,
+        "GROUP BY": 2,
+        "ORDER BY": 2,
+        "HAVING": 2,
+        "DISTINCT": 2,
+        "WINDOW": 4,
+        "RECURSIVE": 5,
+    }
+
+    # Подсчитываем сложность
+    for keyword, weight in complexity_keywords.items():
+        count = query_upper.count(keyword)
+        complexity_score += count * weight
+
+    # Анализируем SELECT *
+    if "SELECT *" in query_upper:
+        complexity_score += 1
+        performance_hints.append(
+            "Consider selecting specific columns instead of SELECT *"
+        )
+
+    # Анализируем отсутствие WHERE
+    if "WHERE" not in query_upper and "SELECT" in query_upper:
+        risk_factors.append("Query without WHERE clause may return all rows")
+        estimated_rows = 10000  # Предполагаем много строк
+
+    # Анализируем функции агрегации
+    aggregate_functions = ["COUNT", "SUM", "AVG", "MAX", "MIN"]
+    for func in aggregate_functions:
+        if f"{func}(" in query_upper:
+            complexity_score += 1
+
+    # Анализируем вложенные запросы
+    subquery_count = query_upper.count("(SELECT")
+    if subquery_count > 0:
+        complexity_score += subquery_count * 2
+        if subquery_count > 2:
+            performance_hints.append("Consider optimizing nested subqueries")
+
+    # Анализируем ORDER BY без LIMIT
+    if "ORDER BY" in query_upper and "LIMIT" not in query_upper:
+        performance_hints.append("Consider adding LIMIT to ORDER BY queries")
+
+    # Категоризация сложности
+    if complexity_score <= 2:
+        complexity_category = "simple"
+    elif complexity_score <= 8:
+        complexity_category = "moderate"
+    elif complexity_score <= 15:
+        complexity_category = "complex"
+    else:
+        complexity_category = "very_complex"
+        risk_factors.append("Very complex query may have performance issues")
+
+    return {
+        "complexity_score": complexity_score,
+        "complexity_category": complexity_category,
+        "estimated_rows": estimated_rows,
+        "performance_hints": performance_hints,
+        "risk_factors": risk_factors,
+        "subquery_count": subquery_count,
+        "join_count": query_upper.count("JOIN"),
+        "analysis_metadata": {
+            "query_length": len(query),
+            "word_count": len(query.split()),
+            "has_aggregation": any(func in query_upper for func in aggregate_functions),
+            "has_grouping": "GROUP BY" in query_upper,
+            "has_ordering": "ORDER BY" in query_upper,
+            "has_limit": "LIMIT" in query_upper,
+        },
+    }
 
 
-# ================================
-# Data Processing Utilities
-# ================================
+# Дополнительные утилитарные функции
 
 
-def infer_pandas_dtypes(df: pd.DataFrame) -> dict[str, str]:
+def mask_connection_string(connection_string: str) -> str:
     """
-    Автоматическое определение типов данных для pandas DataFrame
+    Маскирование паролей в строке подключения для логирования
 
     Args:
-        df: DataFrame для анализа
+        connection_string: Строка подключения
 
     Returns:
-        Dict[str, str]: Словарь с оптимальными типами данных
+        Строка подключения с замаскированным паролем
     """
-    dtypes = {}
-
-    for col in df.columns:
-        series = df[col]
-
-        # Пропускаем колонки с NaN
-        if series.isnull().all():
-            dtypes[col] = "object"
-            continue
-
-        # Определяем тип данных
-        if pd.api.types.is_integer_dtype(series):
-            # Для целых чисел определяем минимальный тип
-            min_val = series.min()
-            max_val = series.max()
-
-            # Приводим к signed типам для совместимости с тестами
-            if min_val >= -128 and max_val <= 127:
-                dtypes[col] = "int8"
-            elif min_val >= -32768 and max_val <= 32767:
-                dtypes[col] = "int16"
-            elif min_val >= -2147483648 and max_val <= 2147483647:
-                dtypes[col] = "int32"
-            else:
-                dtypes[col] = "int64"
-
-        elif pd.api.types.is_float_dtype(series):
-            # Для float определяем точность
-            if series.abs().max() < 3.4e38:
-                dtypes[col] = "float32"
-            else:
-                dtypes[col] = "float64"
-
-        elif pd.api.types.is_bool_dtype(series):
-            dtypes[col] = "bool"
-
-        elif pd.api.types.is_datetime64_any_dtype(series):
-            dtypes[col] = "datetime64[ns]"
-
-        else:
-            # Для строк определяем category vs object
-            unique_ratio = series.nunique() / len(series)
-            if unique_ratio < 0.5:  # Если много повторений - category
-                dtypes[col] = "category"
-            else:
-                dtypes[col] = "object"
-
-    return dtypes
+    try:
+        parsed = urlparse(connection_string)
+        if parsed.password:
+            masked_password = "*" * len(parsed.password)
+            netloc = parsed.netloc.replace(parsed.password, masked_password)
+            masked_url = parsed._replace(netloc=netloc).geturl()
+            return masked_url
+        return connection_string
+    except Exception:
+        return connection_string
 
 
-def optimize_dataframe_memory(df: pd.DataFrame, inplace: bool = False) -> pd.DataFrame:
-    """
-    Оптимизация использования памяти pandas DataFrame
-
-    Args:
-        df: DataFrame для оптимизации
-        inplace: Изменять ли исходный DataFrame
-
-    Returns:
-        Оптимизированный DataFrame
-    """
-    if not inplace:
-        df = df.copy()
-
-    # Получаем рекомендации по типам данных
-    dtype_recommendations = infer_pandas_dtypes(df)
-
-    # Применяем оптимизации
-    for column, recommended_dtype in dtype_recommendations.items():
-        try:
-            if recommended_dtype == "category":
-                df[column] = df[column].astype("category")
-            elif recommended_dtype == "string":
-                df[column] = df[column].astype("string")
-            elif recommended_dtype == "boolean":
-                df[column] = df[column].astype("boolean")
-            elif recommended_dtype.startswith(("int", "uint", "float")):
-                df[column] = pd.to_numeric(df[column], errors="coerce").astype(
-                    recommended_dtype
-                )
-            elif recommended_dtype.startswith("datetime"):
-                df[column] = pd.to_datetime(df[column], errors="coerce")
-        except (ValueError, TypeError) as e:
-            logger.warning(
-                "Failed to optimize column dtype",
-                column=column,
-                recommended_dtype=recommended_dtype,
-                error=str(e),
-            )
-
-    return df
-
-
-def split_dataframe_chunks(
-    df: pd.DataFrame, chunk_size: int, preserve_order: bool = True
-) -> list[pd.DataFrame]:
-    """
-    Разделение DataFrame на чанки заданного размера
-
-    Args:
-        df: DataFrame для разделения
-        chunk_size: Размер каждого чанка
-        preserve_order: Сохранять ли порядок строк
-
-    Returns:
-        Список DataFrame чанков
-    """
-    if chunk_size <= 0:
-        raise ValueError("chunk_size must be positive")
-
-    chunks = []
-    total_rows = len(df)
-
-    for start_idx in range(0, total_rows, chunk_size):
-        end_idx = min(start_idx + chunk_size, total_rows)
-        chunk = df.iloc[start_idx:end_idx]
-
-        if preserve_order:
-            # Добавляем индекс для сохранения порядка
-            chunk = chunk.copy()
-            chunk["__chunk_order__"] = range(start_idx, end_idx)
-
-        chunks.append(chunk)
-
-    return chunks
-
-
-def merge_dataframe_chunks(
-    chunks: list[pd.DataFrame],
-    preserve_order: bool = True,
-    drop_chunk_order: bool = True,
+def generate_test_data(
+    rows: int = 100, columns: list[str] | None = None, seed: int | None = None
 ) -> pd.DataFrame:
     """
-    Объединение чанков DataFrame обратно в один DataFrame
+    Генерация тестовых данных для отладки и тестирования
 
     Args:
-        chunks: Список DataFrame чанков
-        preserve_order: Восстанавливать ли исходный порядок строк
-        drop_chunk_order: Удалять ли служебную колонку __chunk_order__
+        rows: Количество строк
+        columns: Список имен колонок
+        seed: Seed для воспроизводимости
 
     Returns:
-        Объединенный DataFrame
+        DataFrame с тестовыми данными
     """
-    if not chunks:
-        return pd.DataFrame()
+    from datetime import datetime, timedelta
+    import random
+    import string
 
-    # Объединяем все чанки
-    result = pd.concat(chunks, ignore_index=True)
+    if seed:
+        random.seed(seed)
 
-    # Восстанавливаем порядок если нужно
-    if preserve_order and "__chunk_order__" in result.columns:
-        result = result.sort_values("__chunk_order__").reset_index(drop=True)
+    if columns is None:
+        columns = ["id", "name", "email", "age", "score", "active", "created_at"]
 
-    # Удаляем служебную колонку
-    if drop_chunk_order and "__chunk_order__" in result.columns:
-        result = result.drop("__chunk_order__", axis=1)
+    data = {}
 
-    return result
+    for col in columns:
+        if col == "id":
+            data[col] = list(range(1, rows + 1))
+        elif col == "name":
+            data[col] = [f"User_{i}" for i in range(1, rows + 1)]
+        elif col == "email":
+            data[col] = [f"user{i}@example.com" for i in range(1, rows + 1)]
+        elif col == "age":
+            data[col] = [random.randint(18, 80) for _ in range(rows)]
+        elif col == "score":
+            data[col] = [round(random.uniform(0, 100), 2) for _ in range(rows)]
+        elif col == "active":
+            data[col] = [random.choice([True, False]) for _ in range(rows)]
+        elif col == "created_at":
+            base_date = datetime.now()
+            data[col] = [
+                base_date - timedelta(days=random.randint(0, 365)) for _ in range(rows)
+            ]
+        else:
+            # Генерируем случайные строки для неизвестных колонок
+            data[col] = [
+                "".join(random.choices(string.ascii_letters, k=10)) for _ in range(rows)
+            ]
+
+    return pd.DataFrame(data)
 
 
-# ================================
-# File and Path Utilities
-# ================================
-
-
-def ensure_directory(path: str | Path) -> Path:
+def validate_sql_syntax(query: str, dialect: str = "generic") -> dict[str, Any]:
     """
-    Создание директории если она не существует
+    Базовая валидация синтаксиса SQL запроса
 
     Args:
-        path: Путь к директории
+        query: SQL запрос
+        dialect: Диалект SQL
 
     Returns:
-        Path объект созданной/существующей директории
+        Результат валидации
     """
-    path_obj = Path(path)
-    path_obj.mkdir(parents=True, exist_ok=True)
-    return path_obj
+    if not query or not query.strip():
+        return {
+            "valid": False,
+            "errors": ["Query is empty"],
+            "warnings": [],
+        }
+
+    errors = []
+    warnings = []
+
+    query_upper = query.upper().strip()
+
+    # Базовые проверки
+    if not any(
+        keyword in query_upper
+        for keyword in ["SELECT", "INSERT", "UPDATE", "DELETE", "WITH"]
+    ):
+        errors.append("Query must contain at least one SQL command")
+
+    # Проверка парных скобок
+    if query.count("(") != query.count(")"):
+        errors.append("Unmatched parentheses in query")
+
+    # Проверка парных кавычек
+    single_quote_count = query.count("'")
+    if single_quote_count % 2 != 0:
+        errors.append("Unmatched single quotes in query")
+
+    double_quote_count = query.count('"')
+    if double_quote_count % 2 != 0:
+        errors.append("Unmatched double quotes in query")
+
+    # Предупреждения
+    if "SELECT *" in query_upper:
+        warnings.append("Using SELECT * may impact performance")
+
+    if query_upper.count("JOIN") > 5:
+        warnings.append("Query has many JOINs, consider optimization")
+
+    return {
+        "valid": len(errors) == 0,
+        "errors": errors,
+        "warnings": warnings,
+        "dialect": dialect,
+        "query_type": _detect_query_type(query_upper),
+    }
 
 
-def get_temp_file_path(prefix: str = "sql_extractor", suffix: str = ".tmp") -> Path:
-    """
-    Получение пути для временного файла
-
-    Args:
-        prefix: Префикс имени файла
-        suffix: Суффикс имени файла
-
-    Returns:
-        Path объект для временного файла
-    """
-    import os
-    import tempfile
-
-    temp_dir = Path(tempfile.gettempdir())
-    temp_file = (
-        temp_dir / f"{prefix}_{os.getpid()}_{hash(os.urandom(8)) % 1000000}{suffix}"
-    )
-
-    return temp_file
-
-
-# ================================
-# Performance Monitoring Utilities
-# ================================
-
-
-def format_bytes(bytes_value: int) -> str:
-    """
-    Форматирование размера в байтах в человекочитаемый вид
-
-    Args:
-        bytes_value: Размер в байтах
-
-    Returns:
-        Отформатированная строка (например, "1.5 MB")
-    """
-    for unit in ["B", "KB", "MB", "GB", "TB"]:
-        if bytes_value < 1024.0:
-            return f"{bytes_value:.1f} {unit}"
-        bytes_value /= 1024.0
-    return f"{bytes_value:.1f} PB"
-
-
-def format_duration(seconds: float) -> str:
-    """
-    Форматирование длительности в человекочитаемый вид
-
-    Args:
-        seconds: Длительность в секундах
-
-    Returns:
-        Отформатированная строка (например, "2m 30s")
-    """
-    if seconds < 60:
-        return f"{seconds:.1f}s"
-    elif seconds < 3600:
-        minutes = int(seconds // 60)
-        remaining_seconds = seconds % 60
-        return f"{minutes}m {remaining_seconds:.0f}s"
+def _detect_query_type(query_upper: str) -> str:
+    """Определение типа SQL запроса"""
+    if query_upper.strip().startswith("SELECT"):
+        return "SELECT"
+    elif query_upper.strip().startswith("INSERT"):
+        return "INSERT"
+    elif query_upper.strip().startswith("UPDATE"):
+        return "UPDATE"
+    elif query_upper.strip().startswith("DELETE"):
+        return "DELETE"
+    elif query_upper.strip().startswith("WITH"):
+        return "CTE"
     else:
-        hours = int(seconds // 3600)
-        remaining_minutes = int((seconds % 3600) // 60)
-        return f"{hours}h {remaining_minutes}m"
+        return "UNKNOWN"
